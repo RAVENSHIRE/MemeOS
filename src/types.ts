@@ -105,6 +105,7 @@ export interface WalletState {
 
 export interface AgentRiskSettings {
   maxPositionSizeUsd: number; // e.g., $1.50
+  maxDailyLossUsd: number; // hard stop for realized daily losses
   stopLossPercent: number; // e.g., -15%
   takeProfitPercent: number; // e.g., +40%
   minNarrativeScore: number; // e.g., 75

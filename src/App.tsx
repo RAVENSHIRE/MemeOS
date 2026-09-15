@@ -32,12 +32,13 @@ import { WalletConnectModal } from './components/WalletConnectModal';
 
 const DEFAULT_RISK_SETTINGS: AgentRiskSettings = {
   maxPositionSizeUsd: 1.5,
+  maxDailyLossUsd: 1.5,
   stopLossPercent: -15,
   takeProfitPercent: 40,
   minNarrativeScore: 75,
   minLiquidityUsd: 50000,
   maxSlippagePercent: 1.5,
-  autoExecute: true,
+  autoExecute: false,
 };
 
 export default function App() {
@@ -84,6 +85,7 @@ export default function App() {
   const [caseStudyReport, setCaseStudyReport] = useState<CaseStudyReport | null>(null);
   const [targetAchieved, setTargetAchieved] = useState(false);
   const [stoppedAtLoss, setStoppedAtLoss] = useState(false);
+  const [killSwitchActive, setKillSwitchActive] = useState(false);
 
   // 6. Telemetry Logs
   const [logs, setLogs] = useState<TelemetryLog[]>([]);
@@ -112,6 +114,7 @@ export default function App() {
   const fetchMarketTokens = useCallback(async () => {
     try {
       const res = await fetch('/api/market/solana-tokens');
+      if (!res.ok) throw new Error(`Market data request failed (${res.status})`);
       const data = await res.json();
       if (data && Array.isArray(data.tokens)) {
         const seenSymbols = new Set<string>();
@@ -132,10 +135,14 @@ export default function App() {
         setSelectedToken((prev) => prev || (uniqueTokens.length > 0 ? uniqueTokens[0] : null));
         if (data.source === 'LIVE') {
           setSources((s) => ({ ...s, dexscreener: { ...s.dexscreener, status: 'LIVE' } }));
+        } else {
+          setSources((s) => ({ ...s, dexscreener: { ...s.dexscreener, status: 'MOCK' } }));
         }
       }
     } catch (err) {
       console.error('Failed to fetch tokens:', err);
+      setSources((s) => ({ ...s, dexscreener: { ...s.dexscreener, status: 'DISCONNECTED' } }));
+      addLog('MARKET_SCAN', 'Market data unavailable; no new entries will be authorized.', 'alert');
     }
   }, []);
 
@@ -152,16 +159,17 @@ export default function App() {
       if (typeof window !== 'undefined' && 'solana' in window && (window as any).solana?.isPhantom) {
         const resp = await (window as any).solana.connect();
         const pubkey = resp.publicKey.toString();
-        const solBalance = 0.0278; // $5.00 equivalent
+        // Connection alone does not authorize or establish a tradable balance.
+        const solBalance = 0;
         setWallet({
           connected: true,
           address: pubkey,
           solBalance,
           solUsdPrice: 180,
           solUsdValue: solBalance * 180,
-          cashUsd: 5.0,
+          cashUsd: 0,
           positionsValue: 0,
-          equity: 5.0,
+          equity: 0,
           isSimulated: false,
         });
         setIsWalletModalOpen(false);
@@ -210,6 +218,10 @@ export default function App() {
       return;
     }
     const nextState = !isAgentActive;
+    if (killSwitchActive && nextState) {
+      addLog('RISK_CHECK', 'Kill switch is active. Reset the paper session before restarting the agent.', 'alert');
+      return;
+    }
     setIsAgentActive(nextState);
     if (nextState) {
       addLog('OBSERVE', 'AGENT STARTED: Master GO triggered. Autonomous loop executing across 14 deterministic phases.', 'trade');
@@ -238,6 +250,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionStats, trades, finalStatus }),
       });
+      if (!res.ok) throw new Error(`Case study request failed (${res.status})`);
       const data = await res.json();
       if (data && data.report) {
         setCaseStudyReport(data.report);
@@ -260,8 +273,9 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token }),
       });
+      if (!res.ok) throw new Error(`Narrative analysis failed (${res.status})`);
       const data = await res.json();
-      if (data && data.narrativeScore) {
+      if (data && Number.isFinite(data.narrativeScore)) {
         setTokens((prev) =>
           prev.map((t) =>
             (t.address && token.address ? t.address === token.address : t.symbol === token.symbol)
@@ -278,12 +292,13 @@ export default function App() {
         );
         addLog(
           'SCORE',
-          `AI Thesis ready for $${token.symbol}: Score ${data.narrativeScore}/100. "${data.aiThesis.slice(0, 75)}..."`,
+          `AI Thesis ready for $${token.symbol}: Score ${data.narrativeScore}/100. "${String(data.aiThesis || 'No thesis returned').slice(0, 75)}..."`,
           'success'
         );
       }
     } catch (err) {
       console.error('AI Analysis failed:', err);
+      addLog('NARRATIVE_PROOF', `AI analysis unavailable for $${token.symbol}; no order was placed.`, 'warning');
     } finally {
       setIsAnalyzingToken(false);
     }
@@ -291,8 +306,25 @@ export default function App() {
 
   // Execute a trade (Buy)
   const executeBuyTrade = (token: TokenOpportunity) => {
+    if (!wallet.isSimulated) {
+      addLog('RISK_CHECK', 'Mainnet wallet execution is disabled. Use the paper-trading sandbox.', 'alert');
+      return;
+    }
+    if (killSwitchActive || stoppedAtLoss || targetAchieved) {
+      addLog('RISK_CHECK', 'Entry blocked by session safety lock.', 'alert');
+      return;
+    }
     if (activePosition) {
       addLog('RISK_CHECK', `Cannot execute buy: Active position $${activePosition.tokenSymbol} already open. Max 1 active position per risk limits.`, 'warning');
+      return;
+    }
+    if (realizedPnL <= -riskSettings.maxDailyLossUsd) {
+      addLog('RISK_CHECK', `Daily loss limit of $${riskSettings.maxDailyLossUsd.toFixed(2)} reached. New entries blocked.`, 'alert');
+      return;
+    }
+    const score = token.narrativeScore ?? token.xVelocity;
+    if (score < riskSettings.minNarrativeScore || token.rugScore < 85 || token.liquidity < riskSettings.minLiquidityUsd) {
+      addLog('RISK_CHECK', `Entry blocked for $${token.symbol}: score, rug safety, or liquidity threshold failed.`, 'warning');
       return;
     }
     const tradeSizeUsd = Math.min(riskSettings.maxPositionSizeUsd, wallet.cashUsd);
@@ -304,7 +336,11 @@ export default function App() {
     const feeUsd = 0.0025; // 0.000014 SOL priority fee
     const slippageBps = Math.floor(Math.random() * 25) + 35; // 35 - 60 bps
     const effectiveUsd = tradeSizeUsd - feeUsd;
-    const tokensAmount = Math.floor(effectiveUsd / token.priceUsd);
+    const tokensAmount = effectiveUsd / token.priceUsd;
+    if (!Number.isFinite(tokensAmount) || tokensAmount <= 0) {
+      addLog('RISK_CHECK', `Entry blocked for $${token.symbol}: invalid quote or token price.`, 'alert');
+      return;
+    }
 
     const tpPrice = token.priceUsd * (1 + riskSettings.takeProfitPercent / 100);
     const slPrice = token.priceUsd * (1 + riskSettings.stopLossPercent / 100);
@@ -422,9 +458,16 @@ export default function App() {
     setActivePosition(null);
   }, [activePosition, addLog]);
 
+  const handleKillSwitch = useCallback(() => {
+    setKillSwitchActive(true);
+    setIsAgentActive(false);
+    addLog('RISK_CHECK', 'KILL SWITCH ACTIVATED: agent halted and new orders blocked.', 'alert');
+    if (activePosition) closePosition('Kill switch emergency exit');
+  }, [activePosition, closePosition, addLog]);
+
   // Main 14-Step Agent Autonomous Loop Clock
   useEffect(() => {
-    if (!isAgentActive || targetAchieved || stoppedAtLoss) return;
+    if (!isAgentActive || targetAchieved || stoppedAtLoss || killSwitchActive) return;
 
     const loopTimer = setInterval(() => {
       setCurrentStep((prev) => {
@@ -451,7 +494,7 @@ export default function App() {
             // If no active position and autoExecute is true, pick the highest scoring candidate!
             if (!activePosition && riskSettings.autoExecute && tokens.length > 0) {
               const eligible = tokens.filter(
-                (t) => (t.narrativeScore || t.xVelocity) >= riskSettings.minNarrativeScore && t.rugScore >= 85
+                (t) => (t.narrativeScore ?? t.xVelocity) >= riskSettings.minNarrativeScore && t.rugScore >= 85 && t.liquidity >= riskSettings.minLiquidityUsd
               );
               if (eligible.length > 0) {
                 const best = eligible[Math.floor(Math.random() * eligible.length)];
@@ -502,6 +545,7 @@ export default function App() {
     riskSettings,
     targetAchieved,
     stoppedAtLoss,
+    killSwitchActive,
     wallet.equity,
     closePosition,
     addLog,
@@ -596,6 +640,7 @@ export default function App() {
     setMaxDrawdownPercent(0);
     setTargetAchieved(false);
     setStoppedAtLoss(false);
+    setKillSwitchActive(false);
     setIsAgentActive(false);
     setCurrentStep('CONNECT');
     addLog('CONNECT', 'Reset $5 Case Study: Fresh $5.00 capital loaded. Target: $10.00.', 'trade');
@@ -612,6 +657,7 @@ export default function App() {
         onConnectWallet={() => setIsWalletModalOpen(true)}
         onDisconnectWallet={handleDisconnectWallet}
         onToggleAgent={handleToggleAgent}
+        onKillSwitch={handleKillSwitch}
         onResetStudy={handleResetStudy}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenCaseStudy={handleGenerateCaseStudy}
@@ -695,7 +741,7 @@ export default function App() {
               onExecuteTrade={executeBuyTrade}
               onAnalyzeWithAI={handleAnalyzeTokenWithAI}
               isAnalyzing={isAnalyzingToken}
-              canExecute={wallet.connected && !activePosition && wallet.cashUsd >= 1.0}
+              canExecute={wallet.connected && wallet.isSimulated && !activePosition && !killSwitchActive && wallet.cashUsd >= 0.5}
             />
           </div>
         </div>

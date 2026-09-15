@@ -20,6 +20,7 @@ interface Props {
   onConnectWallet: () => void;
   onDisconnectWallet: () => void;
   onToggleAgent: () => void;
+  onKillSwitch: () => void;
   onResetStudy: () => void;
   onOpenSettings: () => void;
   onOpenCaseStudy: () => void;
@@ -35,6 +36,7 @@ export const HeaderBar: React.FC<Props> = ({
   onConnectWallet,
   onDisconnectWallet,
   onToggleAgent,
+  onKillSwitch,
   onResetStudy,
   onOpenSettings,
   onOpenCaseStudy,
@@ -168,6 +170,15 @@ export const HeaderBar: React.FC<Props> = ({
           )}
 
           {/* Master GO / Action Button */}
+          {wallet.connected && (
+            <button
+              onClick={onKillSwitch}
+              className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg bg-rose-950/70 hover:bg-rose-900 border border-rose-700/60 text-rose-300 text-[10px] font-bold transition"
+              title="Immediately halt the agent and exit the paper position"
+            >
+              KILL SWITCH
+            </button>
+          )}
           {!wallet.connected ? (
             <button
               onClick={onConnectWallet}

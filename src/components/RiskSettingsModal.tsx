@@ -17,10 +17,23 @@ export const RiskSettingsModal: React.FC<Props> = ({
 }) => {
   const [localSettings, setLocalSettings] = React.useState<AgentRiskSettings>(settings);
 
+  React.useEffect(() => {
+    if (isOpen) setLocalSettings(settings);
+  }, [isOpen, settings]);
+
   if (!isOpen) return null;
 
   const handleSave = () => {
-    onSaveSettings(localSettings);
+    onSaveSettings({
+      ...localSettings,
+      maxPositionSizeUsd: Math.max(0.5, Math.min(2.5, localSettings.maxPositionSizeUsd)),
+      maxDailyLossUsd: Math.max(0.25, Math.min(5, localSettings.maxDailyLossUsd)),
+      stopLossPercent: Math.min(-1, Math.max(-30, localSettings.stopLossPercent)),
+      takeProfitPercent: Math.max(5, Math.min(100, localSettings.takeProfitPercent)),
+      minNarrativeScore: Math.max(50, Math.min(95, localSettings.minNarrativeScore)),
+      minLiquidityUsd: Math.max(10000, Math.min(200000, localSettings.minLiquidityUsd)),
+      maxSlippagePercent: Math.max(0.1, Math.min(5, localSettings.maxSlippagePercent)),
+    });
     onClose();
   };
 
@@ -62,6 +75,28 @@ export const RiskSettingsModal: React.FC<Props> = ({
             />
             <span className="text-[10px] text-slate-500">
               Caps individual trade risk. $1.50 allows 3 concurrent positions or reserves for compounding.
+            </span>
+          </div>
+
+          {/* Max Daily Loss */}
+          <div>
+            <div className="flex items-center justify-between text-slate-300 mb-1">
+              <span>Max Daily Loss:</span>
+              <span className="text-rose-400 font-bold">${localSettings.maxDailyLossUsd.toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min="0.25"
+              max="5"
+              step="0.25"
+              value={localSettings.maxDailyLossUsd}
+              onChange={(e) =>
+                setLocalSettings({ ...localSettings, maxDailyLossUsd: parseFloat(e.target.value) })
+              }
+              className="w-full accent-rose-400"
+            />
+            <span className="text-[10px] text-slate-500">
+              Pauses new entries after realized losses reach this amount.
             </span>
           </div>
 
