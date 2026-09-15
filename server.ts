@@ -364,19 +364,119 @@ app.get('/api/market/solana-tokens', async (req, res) => {
   }
 });
 
+type AgentConfig = {
+  followedAccounts: string[];
+  copiedWallets: string[];
+  dailyRunners: boolean;
+  aggressive: boolean;
+  positionSizeUsd: number;
+  maxMarketCapUsd?: number;
+};
+type Snapshot = { price: number; volume: number; liquidity: number; high: number; at: number };
+const agentConfig: AgentConfig = {
+  followedAccounts: [], copiedWallets: [], dailyRunners: true, aggressive: false, positionSizeUsd: 1.5,
+};
+const marketCache: { expiresAt: number; tokens: any[] } = { expiresAt: 0, tokens: [] };
+const externalCache: { expiresAt: number; payload: any } = { expiresAt: 0, payload: {} };
+const jupiterCache: { expiresAt: number; prices: Record<string, number> } = { expiresAt: 0, prices: {} };
+const history = new Map<string, Snapshot[]>();
+const lastSignalAt = new Map<string, number>();
+
+function cleanList(values: unknown): string[] {
+  return Array.isArray(values) ? values.map((v) => String(v).trim()).filter(Boolean).slice(0, 50) : [];
+}
+
+function buildSignals(tokens: any[]) {
+  const now = Date.now();
+  return tokens.map((token) => {
+    const key = token.address || token.symbol;
+    const previous = history.get(key) || [];
+    const last = previous.at(-1);
+    const high = Math.max(token.priceUsd, ...(previous.map((x) => x.high).filter(Number.isFinite)));
+    const priceFromHigh = high > 0 ? token.priceUsd / high : 1;
+    const volumeAcceleration = last?.volume ? token.volume24h / last.volume : 1;
+    const reasons: string[] = [];
+    let score = 0;
+    let signalType: 'FOMO' | 'RUNNER' | 'MOMENTUM' = 'MOMENTUM';
+    if (token.liquidity >= 50000) { score += 20; reasons.push('liquidity floor passed'); }
+    if (token.change5m >= 2 || token.change1h >= 8) { score += 25; reasons.push('short-term momentum'); }
+    if (volumeAcceleration >= 1.35) { score += 25; reasons.push(`volume acceleration ${volumeAcceleration.toFixed(1)}x`); }
+    if (agentConfig.dailyRunners && priceFromHigh < 0.75 && priceFromHigh > 0.35 && volumeAcceleration >= 1.15) {
+      score += 25; signalType = 'RUNNER'; reasons.push('drawdown and re-acceleration runner pattern');
+    }
+    if (token.change5m >= 4 && token.xVelocity >= 85) { score += 15; signalType = 'FOMO'; reasons.push('fast social/momentum velocity'); }
+    if (agentConfig.maxMarketCapUsd && token.fdv > agentConfig.maxMarketCapUsd) score = 0;
+    const samples = [...previous, { price: token.priceUsd, volume: token.volume24h, liquidity: token.liquidity, high, at: now }].slice(-24);
+    history.set(key, samples);
+    return { token, score: Math.min(100, score), signalType, reasons, confidence: Math.min(0.99, score / 100), detectedAt: now };
+  }).filter((signal) => signal.score >= (agentConfig.aggressive ? 55 : 70));
+}
+
+app.get('/api/agent/config', (_req, res) => res.json({ config: agentConfig }));
+app.post('/api/agent/config', (req, res) => {
+  const body = req.body || {};
+  agentConfig.followedAccounts = cleanList(body.followedAccounts ?? agentConfig.followedAccounts);
+  agentConfig.copiedWallets = cleanList(body.copiedWallets ?? agentConfig.copiedWallets);
+  if (typeof body.dailyRunners === 'boolean') agentConfig.dailyRunners = body.dailyRunners;
+  if (typeof body.aggressive === 'boolean') agentConfig.aggressive = body.aggressive;
+  if (Number.isFinite(body.positionSizeUsd)) agentConfig.positionSizeUsd = Math.max(0.5, Math.min(1000, Number(body.positionSizeUsd)));
+  if (body.maxMarketCapUsd === null) delete agentConfig.maxMarketCapUsd;
+  else if (Number.isFinite(body.maxMarketCapUsd)) agentConfig.maxMarketCapUsd = Math.max(0, Number(body.maxMarketCapUsd));
+  res.json({ config: agentConfig });
+});
+
+app.get('/api/agent/scan', async (_req, res) => {
+  const now = Date.now();
+  if (marketCache.expiresAt <= now) {
+    const response = await fetch(`http://127.0.0.1:${PORT}/api/market/solana-tokens`).catch(() => null);
+    if (response?.ok) {
+      const data = await response.json();
+      marketCache.tokens = Array.isArray(data.tokens) ? data.tokens : [];
+      marketCache.expiresAt = now + 15000;
+    }
+  }
+  if (externalCache.expiresAt <= now) {
+    const feeds = [process.env.X_SIGNAL_URL, process.env.ONCHAIN_SIGNAL_URL, process.env.PUMPSWAP_SIGNAL_URL].filter(Boolean) as string[];
+    const responses = await Promise.all(feeds.map(async (url) => {
+      try {
+        const response = await fetch(url, { signal: AbortSignal.timeout(2500) });
+        return response.ok ? await response.json() : null;
+      } catch { return null; }
+    }));
+    externalCache.payload = { configured: feeds.length, responses: responses.filter(Boolean) };
+    externalCache.expiresAt = now + 15000;
+  }
+  if (jupiterCache.expiresAt <= now && marketCache.tokens.length) {
+    const ids = marketCache.tokens.map((token) => token.address).filter(Boolean).slice(0, 20).join(',');
+    try {
+      const response = await fetch(`https://lite-api.jup.ag/price/v2?ids=${encodeURIComponent(ids)}`, { signal: AbortSignal.timeout(2500) });
+      if (response.ok) {
+        const data = await response.json();
+        jupiterCache.prices = Object.fromEntries(Object.entries(data.data || {}).map(([address, quote]: [string, any]) => [address, Number(quote?.price)]).filter(([, price]) => Number.isFinite(price)));
+      }
+    } catch { /* DexScreener remains the cached fallback */ }
+    jupiterCache.expiresAt = now + 15000;
+  }
+  marketCache.tokens = marketCache.tokens.map((token) => jupiterCache.prices[token.address] ? { ...token, priceUsd: jupiterCache.prices[token.address] } : token);
+  const signals = buildSignals(marketCache.tokens);
+  const freshSignals = signals.filter((signal) => now - (lastSignalAt.get(signal.token.address) || 0) > 30000);
+  freshSignals.forEach((signal) => lastSignalAt.set(signal.token.address, now));
+  res.json({ source: marketCache.tokens.length ? 'LIVE_OR_CACHED' : 'DISCONNECTED', tokens: marketCache.tokens, signals: freshSignals.slice(0, 5), config: agentConfig, feeds: { dexScreener: true, jupiter: Object.keys(jupiterCache.prices).length > 0, x: Boolean(process.env.X_SIGNAL_URL), onChain: Boolean(process.env.ONCHAIN_SIGNAL_URL), pumpSwap: Boolean(process.env.PUMPSWAP_SIGNAL_URL) }, external: externalCache.payload, cacheExpiresAt: Math.min(marketCache.expiresAt, jupiterCache.expiresAt || marketCache.expiresAt) });
+});
+
 // Endpoint: Check system integration statuses
 app.get('/api/market/sources-status', (req, res) => {
   const hasGemini = Boolean(process.env.GEMINI_API_KEY);
   res.json({
-    dexscreener: { status: 'LIVE', latencyMs: 142, lastSync: new Date().toISOString() },
-    solanaRpc: { status: 'LIVE', latencyMs: 38, cluster: 'mainnet-beta', currentSlot: 312498210 },
-    xRadar: { status: 'LIVE', latencyMs: 210, tracker: 'X Memetic Stream Adapter' },
+    dexscreener: { status: 'LIVE', lastSync: new Date().toISOString() },
+    solanaRpc: { status: process.env.SOLANA_RPC_URL ? 'LIVE' : 'DISCONNECTED', cluster: 'mainnet-beta' },
+    xRadar: { status: process.env.X_SIGNAL_URL ? 'LIVE' : 'DISCONNECTED', tracker: process.env.X_SIGNAL_URL ? 'Configured signal adapter' : 'Configure X_SIGNAL_URL' },
     gemini: {
       status: hasGemini ? 'LIVE' : 'MOCK',
       model: 'gemini-3.6-flash',
       mode: hasGemini ? 'Active Server Intelligence' : 'Heuristic Engine (Mock)',
     },
-    jupiter: { status: 'LIVE', latencyMs: 85, router: 'V6 Ultra-Low Slippage' },
+    jupiter: { status: 'LIVE', router: 'Cached price enrichment; paper route only' },
   });
 });
 

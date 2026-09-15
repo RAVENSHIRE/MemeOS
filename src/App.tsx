@@ -14,6 +14,8 @@ import {
   AgentRiskSettings,
   CaseStudyReport,
   TelemetryLog,
+  AgentConfig,
+  AgentSignal,
 } from './types';
 
 import { HeaderBar } from './components/HeaderBar';
@@ -29,6 +31,7 @@ import { CaseStudyModal } from './components/CaseStudyModal';
 import { RiskSettingsModal } from './components/RiskSettingsModal';
 import { DataSourcesModal } from './components/DataSourcesModal';
 import { WalletConnectModal } from './components/WalletConnectModal';
+import { AgentCommandPanel } from './components/AgentCommandPanel';
 
 const DEFAULT_RISK_SETTINGS: AgentRiskSettings = {
   maxPositionSizeUsd: 1.5,
@@ -46,7 +49,7 @@ export default function App() {
   const [sources, setSources] = useState<DataSourcesConfig>({
     dexscreener: { status: 'LIVE', name: 'DexScreener API', info: 'Live Solana DEX pair search & token-profiles' },
     solanaRpc: { status: 'LIVE', name: 'Solana RPC Gateway', info: 'Mainnet-beta slot cluster & keypair manager' },
-    xRadar: { status: 'LIVE', name: 'X Memetic Stream Radar', info: 'Real-time velocity, mentions & creator activity' },
+    xRadar: { status: 'DISCONNECTED', name: 'X Memetic Stream Radar', info: 'Configure X_SIGNAL_URL to enable monitored-account events' },
     gemini: { status: 'LIVE', name: 'Gemini Intelligence Engine', info: 'AI thesis validation & narrative scoring' },
     jupiter: { status: 'LIVE', name: 'Jupiter Swap Router', info: 'Ultra-low slippage Solana routing & fee optimizer' },
   });
@@ -89,6 +92,10 @@ export default function App() {
 
   // 6. Telemetry Logs
   const [logs, setLogs] = useState<TelemetryLog[]>([]);
+  const [agentConfig, setAgentConfig] = useState<AgentConfig>({
+    followedAccounts: [], copiedWallets: [], dailyRunners: true, aggressive: false, positionSizeUsd: 1.5,
+  });
+  const [latestSignal, setLatestSignal] = useState<AgentSignal | null>(null);
 
   // 7. Modals
   const [isDataSourcesOpen, setIsDataSourcesOpen] = useState(false);
@@ -151,6 +158,88 @@ export default function App() {
     fetchMarketTokens();
     addLog('CONNECT', 'MEME OS boot sequence initialized. Waiting for Phantom wallet connection.', 'info');
   }, [fetchMarketTokens, addLog]);
+
+  const applyAgentCommand = useCallback(async (rawCommand: string) => {
+    const command = rawCommand.trim();
+    const lower = command.toLowerCase();
+    const next = { ...agentConfig };
+    const account = command.match(/follow\s+@?([a-z0-9_.-]+)/i)?.[1];
+    const walletMatch = command.match(/copy\s+(?:this\s+)?wallet\s+([1-9a-zA-Z]{20,})/i);
+    const size = command.match(/\$([\d.]+)\s*per\s*trade/i)?.[1];
+    const cap = command.match(/under\s+\$?([\d.]+)\s*m(?:\s*mc)?/i)?.[1];
+    if (account) next.followedAccounts = [...new Set([...next.followedAccounts, `@${account}`])];
+    if (walletMatch) next.copiedWallets = [...new Set([...next.copiedWallets, walletMatch[1]])];
+    if (lower.includes('runners on')) next.dailyRunners = true;
+    if (lower.includes('runners off')) next.dailyRunners = false;
+    if (lower.includes('trade aggressively')) next.aggressive = true;
+    if (lower.includes('trade conservatively')) next.aggressive = false;
+    if (lower.includes('autonomous off')) {
+      setIsAgentActive(false);
+      setRiskSettings((settings) => ({ ...settings, autoExecute: false }));
+    }
+    if (lower.includes('autonomous on')) setRiskSettings((settings) => ({ ...settings, autoExecute: true }));
+    if (size) {
+      next.positionSizeUsd = Math.max(0.5, Math.min(1000, Number(size)));
+      setRiskSettings((settings) => ({ ...settings, maxPositionSizeUsd: next.positionSizeUsd }));
+    }
+    if (cap) next.maxMarketCapUsd = Number(cap) * 1_000_000;
+    try {
+      const response = await fetch('/api/agent/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
+      if (!response.ok) throw new Error(`Command failed (${response.status})`);
+      const data = await response.json();
+      setAgentConfig(data.config);
+      addLog('OBSERVE', `Command applied: ${command}`, 'success');
+      if (lower.includes('show today') && lower.includes('runner')) addLog('MARKET_SCAN', 'Daily runner view is available in the latest signal stream.', 'info');
+      if (lower.includes('why did you buy')) addLog('LEARN', latestSignal ? `Latest signal: ${latestSignal.reasons.join(', ')}.` : 'No autonomous purchase has been recorded.', 'info');
+    } catch (error) {
+      addLog('OBSERVE', `Command failed: ${String(error)}`, 'alert');
+    }
+  }, [agentConfig, addLog, latestSignal]);
+
+  // One cached backend scan feeds both the table and the fast deterministic signal loop.
+  useEffect(() => {
+    if (!isAgentActive || killSwitchActive) return;
+    let cancelled = false;
+    const scan = async () => {
+      try {
+        const response = await fetch('/api/agent/scan');
+        if (!response.ok) return;
+        const data = await response.json();
+        if (cancelled) return;
+        if (Array.isArray(data.tokens) && data.tokens.length) setTokens(data.tokens);
+        if (data.config) setAgentConfig(data.config);
+        if (Array.isArray(data.tokens) && activePosition) {
+          const liveToken = data.tokens.find((token: TokenOpportunity) => token.address === activePosition.tokenAddress);
+          if (liveToken && Number.isFinite(liveToken.priceUsd)) {
+            setActivePosition((position) => {
+              if (!position || position.tokenAddress !== liveToken.address) return position;
+              const currentValue = position.tokenAmount * liveToken.priceUsd;
+              const pnl = currentValue - position.investedUsd;
+              return {
+                ...position,
+                currentPrice: liveToken.priceUsd,
+                currentValueUsd: currentValue,
+                unrealizedPnL: pnl,
+                unrealizedPnLPercent: (pnl / position.investedUsd) * 100,
+                trailingPeakPrice: Math.max(position.trailingPeakPrice, liveToken.priceUsd),
+              };
+            });
+          }
+        }
+        const signal = data.signals?.[0] as AgentSignal | undefined;
+        if (signal) {
+          setLatestSignal(signal);
+          addLog(signal.signalType === 'FOMO' ? 'FOMO_WATCHLIST' : 'TRADE_CANDIDATE', `${signal.signalType} signal $${signal.token.symbol}: ${signal.reasons.join(', ')}`, 'success');
+          if (riskSettings.autoExecute && !activePosition) executeBuyTrade(signal.token);
+        }
+      } catch (error) {
+        addLog('MARKET_SCAN', `Agent scan unavailable: ${String(error)}`, 'warning');
+      }
+    };
+    scan();
+    const timer = setInterval(scan, 5000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [isAgentActive, killSwitchActive, activePosition]);
 
   // Connect Real Phantom Wallet
   const handleConnectRealPhantom = async () => {
@@ -491,17 +580,7 @@ export default function App() {
           case 'TRADE_CANDIDATE':
             return 'RISK_CHECK';
           case 'RISK_CHECK':
-            // If no active position and autoExecute is true, pick the highest scoring candidate!
-            if (!activePosition && riskSettings.autoExecute && tokens.length > 0) {
-              const eligible = tokens.filter(
-                (t) => (t.narrativeScore ?? t.xVelocity) >= riskSettings.minNarrativeScore && t.rugScore >= 85 && t.liquidity >= riskSettings.minLiquidityUsd
-              );
-              if (eligible.length > 0) {
-                const best = eligible[Math.floor(Math.random() * eligible.length)];
-                executeBuyTrade(best);
-                return 'EXECUTE';
-              }
-            }
+            // Entries are triggered only by the cached backend signal engine.
             return activePosition ? 'MONITOR' : 'WATCH';
           case 'EXECUTE':
             return 'MONITOR';
@@ -550,35 +629,6 @@ export default function App() {
     closePosition,
     addLog,
   ]);
-
-  // Live Price Ticks & Market Simulation for Active Position
-  useEffect(() => {
-    if (!activePosition) return;
-
-    const tickInterval = setInterval(() => {
-      setActivePosition((pos) => {
-        if (!pos) return null;
-        // Realistic memecoin delta: slight upward bias for top tokens, with volatility
-        const deltaFactor = (Math.random() - 0.44) * 0.055; // -2.4% to +3.1% per tick
-        const nextPrice = Math.max(pos.entryPrice * 0.4, pos.currentPrice * (1 + deltaFactor));
-        const nextValue = pos.tokenAmount * nextPrice;
-        const nextUnrealized = nextValue - pos.investedUsd;
-        const nextUnrealizedPct = (nextUnrealized / pos.investedUsd) * 100;
-        const nextPeak = Math.max(pos.trailingPeakPrice, nextPrice);
-
-        return {
-          ...pos,
-          currentPrice: nextPrice,
-          currentValueUsd: nextValue,
-          unrealizedPnL: nextUnrealized,
-          unrealizedPnLPercent: nextUnrealizedPct,
-          trailingPeakPrice: nextPeak,
-        };
-      });
-    }, 1200);
-
-    return () => clearInterval(tickInterval);
-  }, [activePosition]);
 
   // Sync Wallet Equity with Active Position & Check $10 Target or Stop Loss
   useEffect(() => {
@@ -669,6 +719,7 @@ export default function App() {
 
       {/* Main Single-Screen Command Center */}
       <main className="max-w-7xl mx-auto p-4 space-y-4">
+        <AgentCommandPanel config={agentConfig} signal={latestSignal} onCommand={applyAgentCommand} />
         {/* 1. The 14-Step AGENT LOOP Pipeline */}
         <AgentLoopPipeline
           currentStep={currentStep}

@@ -143,6 +143,24 @@ export interface TelemetryLog {
   type: 'info' | 'success' | 'warning' | 'trade' | 'alert';
 }
 
+export interface AgentSignal {
+  token: TokenOpportunity;
+  score: number;
+  signalType: 'FOMO' | 'RUNNER' | 'MOMENTUM';
+  reasons: string[];
+  confidence: number;
+  detectedAt: number;
+}
+
+export interface AgentConfig {
+  followedAccounts: string[];
+  copiedWallets: string[];
+  dailyRunners: boolean;
+  aggressive: boolean;
+  positionSizeUsd: number;
+  maxMarketCapUsd?: number;
+}
+
 export interface Meme420Stats {
   burnedSolEquivalent: number;
   totalBurnedTokens: number;

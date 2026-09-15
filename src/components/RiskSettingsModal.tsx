@@ -26,7 +26,7 @@ export const RiskSettingsModal: React.FC<Props> = ({
   const handleSave = () => {
     onSaveSettings({
       ...localSettings,
-      maxPositionSizeUsd: Math.max(0.5, Math.min(2.5, localSettings.maxPositionSizeUsd)),
+      maxPositionSizeUsd: Math.max(0.5, Math.min(1000, localSettings.maxPositionSizeUsd)),
       maxDailyLossUsd: Math.max(0.25, Math.min(5, localSettings.maxDailyLossUsd)),
       stopLossPercent: Math.min(-1, Math.max(-30, localSettings.stopLossPercent)),
       takeProfitPercent: Math.max(5, Math.min(100, localSettings.takeProfitPercent)),
@@ -65,8 +65,8 @@ export const RiskSettingsModal: React.FC<Props> = ({
             <input
               type="range"
               min="0.50"
-              max="2.50"
-              step="0.10"
+              max="1000"
+              step="0.50"
               value={localSettings.maxPositionSizeUsd}
               onChange={(e) =>
                 setLocalSettings({ ...localSettings, maxPositionSizeUsd: parseFloat(e.target.value) })
