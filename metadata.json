@@ -1,0 +1,6 @@
+{
+  "name": "MEME OS",
+  "description": "Fully agentic Solana memecoin research, growth and trading system with live DexScreener and market feeds, AI narrative scoring, and a reproducible $5 to $10 capital case study engine.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
