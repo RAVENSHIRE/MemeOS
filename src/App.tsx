@@ -93,7 +93,9 @@ export default function App() {
   // 6. Telemetry Logs
   const [logs, setLogs] = useState<TelemetryLog[]>([]);
   const [agentConfig, setAgentConfig] = useState<AgentConfig>({
-    followedAccounts: [], copiedWallets: [], dailyRunners: true, aggressive: false, positionSizeUsd: 1.5,
+    followedAccounts: [], copiedWallets: [], followedFomoTraders: [], sourceModes: {}, watchedCoins: [],
+    dailyRunners: true, aggressive: false, positionSizeUsd: 1.5, maxDailySpendUsd: 25,
+    maxOpenExposureUsd: 5, maxPositions: 1, maxHoldingDays: 120,
   });
   const [latestSignal, setLatestSignal] = useState<AgentSignal | null>(null);
 
@@ -165,10 +167,18 @@ export default function App() {
     const next = { ...agentConfig };
     const account = command.match(/follow\s+@?([a-z0-9_.-]+)/i)?.[1];
     const walletMatch = command.match(/copy\s+(?:this\s+)?wallet\s+([1-9a-zA-Z]{20,})/i);
+    const fomoMatch = command.match(/(?:follow|copy)\s+(?:this\s+)?(?:fomo\s+)?trader\s+([\w.-]+)/i);
+    const coinMatch = command.match(/watch\s+(?:this\s+)?coin\s+([1-9a-zA-Z]{20,})/i);
     const size = command.match(/\$([\d.]+)\s*per\s*trade/i)?.[1];
+    const dailyLimit = command.match(/\$([\d.]+)\s*daily\s*limit/i)?.[1];
     const cap = command.match(/under\s+\$?([\d.]+)\s*m(?:\s*mc)?/i)?.[1];
     if (account) next.followedAccounts = [...new Set([...next.followedAccounts, `@${account}`])];
     if (walletMatch) next.copiedWallets = [...new Set([...next.copiedWallets, walletMatch[1]])];
+    if (fomoMatch) {
+      next.followedFomoTraders = [...new Set([...next.followedFomoTraders, fomoMatch[1]])];
+      next.sourceModes[fomoMatch[1]] = lower.startsWith('copy') ? 'COPY' : 'FOLLOW';
+    }
+    if (coinMatch) next.watchedCoins = [...new Set([...next.watchedCoins, coinMatch[1]])];
     if (lower.includes('runners on')) next.dailyRunners = true;
     if (lower.includes('runners off')) next.dailyRunners = false;
     if (lower.includes('trade aggressively')) next.aggressive = true;
@@ -182,7 +192,9 @@ export default function App() {
       next.positionSizeUsd = Math.max(0.5, Math.min(1000, Number(size)));
       setRiskSettings((settings) => ({ ...settings, maxPositionSizeUsd: next.positionSizeUsd }));
     }
+    if (dailyLimit) next.maxDailySpendUsd = Math.max(0.5, Number(dailyLimit));
     if (cap) next.maxMarketCapUsd = Number(cap) * 1_000_000;
+    if (lower === 'sell' || lower.startsWith('sell ')) closePosition('Manual sell command');
     try {
       const response = await fetch('/api/agent/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
       if (!response.ok) throw new Error(`Command failed (${response.status})`);
@@ -411,12 +423,25 @@ export default function App() {
       addLog('RISK_CHECK', `Daily loss limit of $${riskSettings.maxDailyLossUsd.toFixed(2)} reached. New entries blocked.`, 'alert');
       return;
     }
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const dailySpend = trades
+      .filter((trade) => trade.type === 'BUY' && trade.timestamp >= startOfDay.getTime())
+      .reduce((sum, trade) => sum + trade.totalUsd, 0);
+    if (dailySpend >= agentConfig.maxDailySpendUsd) {
+      addLog('RISK_CHECK', `Daily spend limit of $${agentConfig.maxDailySpendUsd.toFixed(2)} reached.`, 'alert');
+      return;
+    }
     const score = token.narrativeScore ?? token.xVelocity;
     if (score < riskSettings.minNarrativeScore || token.rugScore < 85 || token.liquidity < riskSettings.minLiquidityUsd) {
       addLog('RISK_CHECK', `Entry blocked for $${token.symbol}: score, rug safety, or liquidity threshold failed.`, 'warning');
       return;
     }
     const tradeSizeUsd = Math.min(riskSettings.maxPositionSizeUsd, wallet.cashUsd);
+    if (wallet.positionsValue + tradeSizeUsd > agentConfig.maxOpenExposureUsd) {
+      addLog('RISK_CHECK', `Open exposure limit of $${agentConfig.maxOpenExposureUsd.toFixed(2)} would be exceeded.`, 'alert');
+      return;
+    }
     if (tradeSizeUsd < 0.5) {
       addLog('RISK_CHECK', 'Insufficient liquid cash for new trade.', 'alert');
       return;
@@ -597,6 +622,10 @@ export default function App() {
                 closePosition(`Stop Loss triggered (${pnlPct.toFixed(1)}%)`);
                 return 'EXIT';
               }
+              if (Date.now() - activePosition.entryTime >= agentConfig.maxHoldingDays * 86400000) {
+                closePosition(`Maximum holding period reached (${agentConfig.maxHoldingDays} days)`);
+                return 'EXIT';
+              }
               // Check trailing stop: if price fell 10% from peak
               if (activePosition.currentPrice < activePosition.trailingPeakPrice * 0.90 && pnlPct > 15) {
                 closePosition(`Trailing Stop activated (-10% from high watermark)`);
@@ -622,6 +651,7 @@ export default function App() {
     activePosition,
     tokens,
     riskSettings,
+    agentConfig,
     targetAchieved,
     stoppedAtLoss,
     killSwitchActive,

@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
@@ -367,20 +368,44 @@ app.get('/api/market/solana-tokens', async (req, res) => {
 type AgentConfig = {
   followedAccounts: string[];
   copiedWallets: string[];
+  followedFomoTraders: string[];
+  sourceModes: Record<string, 'FOLLOW' | 'SIGNAL' | 'COPY'>;
+  watchedCoins: string[];
   dailyRunners: boolean;
   aggressive: boolean;
   positionSizeUsd: number;
+  maxDailySpendUsd: number;
+  maxOpenExposureUsd: number;
+  maxPositions: number;
+  maxHoldingDays: number;
   maxMarketCapUsd?: number;
 };
 type Snapshot = { price: number; volume: number; liquidity: number; high: number; at: number };
 const agentConfig: AgentConfig = {
-  followedAccounts: [], copiedWallets: [], dailyRunners: true, aggressive: false, positionSizeUsd: 1.5,
+  followedAccounts: [], copiedWallets: [], followedFomoTraders: [], sourceModes: {}, watchedCoins: [],
+  dailyRunners: true, aggressive: false, positionSizeUsd: 1.5, maxDailySpendUsd: 25,
+  maxOpenExposureUsd: 5, maxPositions: 1, maxHoldingDays: 120,
 };
 const marketCache: { expiresAt: number; tokens: any[] } = { expiresAt: 0, tokens: [] };
 const externalCache: { expiresAt: number; payload: any } = { expiresAt: 0, payload: {} };
 const jupiterCache: { expiresAt: number; prices: Record<string, number> } = { expiresAt: 0, prices: {} };
 const history = new Map<string, Snapshot[]>();
 const lastSignalAt = new Map<string, number>();
+const historyPath = path.join(process.cwd(), 'data', 'runner-history.json');
+let lastHistoryPersist = 0;
+try {
+  const saved = JSON.parse(fs.readFileSync(historyPath, 'utf8'));
+  Object.entries(saved).forEach(([key, value]) => history.set(key, value as Snapshot[]));
+} catch { /* first run or unavailable filesystem */ }
+
+function persistHistory() {
+  if (Date.now() - lastHistoryPersist < 15000) return;
+  try {
+    fs.mkdirSync(path.dirname(historyPath), { recursive: true });
+    fs.writeFileSync(historyPath, JSON.stringify(Object.fromEntries(history)), 'utf8');
+    lastHistoryPersist = Date.now();
+  } catch { /* persistence is best effort; live signals continue */ }
+}
 
 function cleanList(values: unknown): string[] {
   return Array.isArray(values) ? values.map((v) => String(v).trim()).filter(Boolean).slice(0, 50) : [];
@@ -417,9 +442,18 @@ app.post('/api/agent/config', (req, res) => {
   const body = req.body || {};
   agentConfig.followedAccounts = cleanList(body.followedAccounts ?? agentConfig.followedAccounts);
   agentConfig.copiedWallets = cleanList(body.copiedWallets ?? agentConfig.copiedWallets);
+  agentConfig.followedFomoTraders = cleanList(body.followedFomoTraders ?? agentConfig.followedFomoTraders);
+  agentConfig.watchedCoins = cleanList(body.watchedCoins ?? agentConfig.watchedCoins);
+  if (body.sourceModes && typeof body.sourceModes === 'object') {
+    agentConfig.sourceModes = Object.fromEntries(Object.entries(body.sourceModes).filter(([, mode]) => ['FOLLOW', 'SIGNAL', 'COPY'].includes(String(mode))).slice(0, 100)) as AgentConfig['sourceModes'];
+  }
   if (typeof body.dailyRunners === 'boolean') agentConfig.dailyRunners = body.dailyRunners;
   if (typeof body.aggressive === 'boolean') agentConfig.aggressive = body.aggressive;
   if (Number.isFinite(body.positionSizeUsd)) agentConfig.positionSizeUsd = Math.max(0.5, Math.min(1000, Number(body.positionSizeUsd)));
+  if (Number.isFinite(body.maxDailySpendUsd)) agentConfig.maxDailySpendUsd = Math.max(0.5, Math.min(100000, Number(body.maxDailySpendUsd)));
+  if (Number.isFinite(body.maxOpenExposureUsd)) agentConfig.maxOpenExposureUsd = Math.max(0.5, Math.min(100000, Number(body.maxOpenExposureUsd)));
+  if (Number.isFinite(body.maxPositions)) agentConfig.maxPositions = Math.max(1, Math.min(20, Math.floor(Number(body.maxPositions))));
+  if (Number.isFinite(body.maxHoldingDays)) agentConfig.maxHoldingDays = Math.max(1, Math.min(120, Math.floor(Number(body.maxHoldingDays))));
   if (body.maxMarketCapUsd === null) delete agentConfig.maxMarketCapUsd;
   else if (Number.isFinite(body.maxMarketCapUsd)) agentConfig.maxMarketCapUsd = Math.max(0, Number(body.maxMarketCapUsd));
   res.json({ config: agentConfig });
@@ -459,7 +493,16 @@ app.get('/api/agent/scan', async (_req, res) => {
   }
   marketCache.tokens = marketCache.tokens.map((token) => jupiterCache.prices[token.address] ? { ...token, priceUsd: jupiterCache.prices[token.address] } : token);
   const signals = buildSignals(marketCache.tokens);
-  const freshSignals = signals.filter((signal) => now - (lastSignalAt.get(signal.token.address) || 0) > 30000);
+  persistHistory();
+  const externalSignals = externalCache.payload.responses.flatMap((payload: any) => Array.isArray(payload?.signals) ? payload.signals : []).map((event: any) => {
+    const token = marketCache.tokens.find((item) => item.address === event.tokenAddress || item.symbol === event.symbol);
+    if (!token) return null;
+    const source = String(event.source || event.trader || event.account || 'external');
+    const mode = agentConfig.sourceModes[source] || (agentConfig.copiedWallets.includes(source) ? 'COPY' : 'SIGNAL');
+    if (mode === 'FOLLOW') return null;
+    return { token, score: Math.max(Number(event.score) || 80, mode === 'COPY' ? 90 : 0), signalType: event.signalType === 'FOMO' ? 'FOMO' : 'MOMENTUM', reasons: [mode === 'COPY' ? `copy source ${source}` : `external signal ${source}`, ...(Array.isArray(event.reasons) ? event.reasons : [])], confidence: 0.95, detectedAt: now };
+  }).filter(Boolean);
+  const freshSignals = [...externalSignals, ...signals].filter((signal) => now - (lastSignalAt.get(signal.token.address) || 0) > 30000);
   freshSignals.forEach((signal) => lastSignalAt.set(signal.token.address, now));
   res.json({ source: marketCache.tokens.length ? 'LIVE_OR_CACHED' : 'DISCONNECTED', tokens: marketCache.tokens, signals: freshSignals.slice(0, 5), config: agentConfig, feeds: { dexScreener: true, jupiter: Object.keys(jupiterCache.prices).length > 0, x: Boolean(process.env.X_SIGNAL_URL), onChain: Boolean(process.env.ONCHAIN_SIGNAL_URL), pumpSwap: Boolean(process.env.PUMPSWAP_SIGNAL_URL) }, external: externalCache.payload, cacheExpiresAt: Math.min(marketCache.expiresAt, jupiterCache.expiresAt || marketCache.expiresAt) });
 });

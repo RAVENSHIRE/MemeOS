@@ -155,9 +155,16 @@ export interface AgentSignal {
 export interface AgentConfig {
   followedAccounts: string[];
   copiedWallets: string[];
+  followedFomoTraders: string[];
+  sourceModes: Record<string, 'FOLLOW' | 'SIGNAL' | 'COPY'>;
+  watchedCoins: string[];
   dailyRunners: boolean;
   aggressive: boolean;
   positionSizeUsd: number;
+  maxDailySpendUsd: number;
+  maxOpenExposureUsd: number;
+  maxPositions: number;
+  maxHoldingDays: number;
   maxMarketCapUsd?: number;
 }
 
