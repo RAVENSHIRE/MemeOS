@@ -233,7 +233,7 @@ export default function App() {
         setMarketError(null);
         setSources(prev => ({ ...prev, dexscreener: { ...prev.dexscreener, status: feedStatus }, xRadar: { ...prev.xRadar, status: data.feeds?.x ? 'LIVE' : 'DISCONNECTED' }, jupiter: { ...prev.jupiter, status: data.feeds?.jupiter ? 'LIVE' : 'DISCONNECTED' } }));
         if (Array.isArray(data.tokens)) setTokens(prev => {
-          const analyzed = new Map(prev.filter(token => token.aiThesis).map(token => [token.address, token]));
+          const analyzed = new Map<string, TokenOpportunity>(prev.filter(token => token.aiThesis).map(token => [token.address, token] as const));
           return uniqueTokens(data.tokens).map(token => {
             const prior = analyzed.get(token.address);
             return prior ? { ...token, narrativeScore: prior.narrativeScore, aiThesis: prior.aiThesis, analysisSource: prior.analysisSource, viralVelocity: prior.viralVelocity, expectedUpside: prior.expectedUpside, recommendedAction: prior.recommendedAction } : token;
