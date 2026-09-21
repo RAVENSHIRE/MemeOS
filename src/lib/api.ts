@@ -1,10 +1,20 @@
 import type { AgentSignal, TokenOpportunity } from '../types';
 
+export interface XAdapterEvent {
+  tokenAddress: string;
+  tokenSymbol: string;
+  source: string;
+  score: number | null;
+  detectedAt: number;
+  reasons: string[];
+}
+
 export interface MarketSnapshot {
   source: 'LIVE' | 'MOCK' | 'DISCONNECTED';
   fetchedAt?: number;
   tokens: TokenOpportunity[];
   signals?: AgentSignal[];
+  xSignals?: XAdapterEvent[];
   cacheExpiresAt?: number;
 }
 
