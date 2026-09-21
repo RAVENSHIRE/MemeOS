@@ -236,7 +236,7 @@ export default function App() {
     const scan = async () => {
       try {
         const response = await fetch('/api/agent/scan');
-        if (!response.ok) return;
+        if (!response.ok) throw new Error(`Scan failed (${response.status})`);
         const data = await response.json();
         if (cancelled) return;
         const feedStatus = data.source === 'LIVE' ? 'LIVE' : data.source === 'MOCK' ? 'MOCK' : 'DISCONNECTED';
@@ -270,7 +270,10 @@ export default function App() {
           if (feedStatus === 'LIVE' && riskSettings.autoExecute && !activePosition) executeBuyTrade(signal.token);
         }
       } catch (error) {
-        addLog('MARKET_SCAN', `Agent scan unavailable: ${String(error)}`, 'warning');
+        if (cancelled) return;
+        setMarketStatus('DISCONNECTED');
+        setSources(prev => ({ ...prev, dexscreener: { ...prev.dexscreener, status: 'DISCONNECTED' } }));
+        addLog('MARKET_SCAN', `Agent scan unavailable: ${String(error)}. New entries disabled.`, 'warning');
       }
     };
     scan();
@@ -542,7 +545,7 @@ export default function App() {
 
     addLog(
       'EXECUTE',
-      `BUY SWAP CONFIRMED: $${tradeSizeUsd.toFixed(2)} -> ${tokensAmount.toLocaleString()} $${token.symbol} @ $${token.priceUsd.toFixed(4)}. Slippage: ${slippageBps} bps. Tx: ${txSig}`,
+      `PAPER BUY SIMULATED: $${tradeSizeUsd.toFixed(2)} -> ${tokensAmount.toLocaleString()} $${token.symbol} @ $${token.priceUsd.toFixed(4)}. Slippage: ${slippageBps} bps. Tx: ${txSig}`,
       'trade'
     );
   };
@@ -594,7 +597,7 @@ export default function App() {
 
     addLog(
       'EXIT',
-      `SELL SWAP EXECUTED: Closed $${activePosition.tokenSymbol}. Net P&L: ${netTradePnL >= 0 ? '+' : ''}$${netTradePnL.toFixed(2)} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(1)}%). Reason: ${reason}`,
+      `PAPER SELL SIMULATED: Closed $${activePosition.tokenSymbol}. Net P&L: ${netTradePnL >= 0 ? '+' : ''}$${netTradePnL.toFixed(2)} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(1)}%). Reason: ${reason}`,
       isWin ? 'success' : 'alert'
     );
 
@@ -819,7 +822,7 @@ export default function App() {
 
             <Meme420Module
               onTriggerBurn={() => {
-                addLog('EXECUTE', '🔥 Community 420 burn recorded on-chain to Solana incinerator.', 'trade');
+                addLog('EXECUTE', '420 burn action is a dashboard demonstration; no on-chain burn was submitted.', 'trade');
               }}
             />
 
