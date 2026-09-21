@@ -789,76 +789,9 @@ export default function App() {
         <OverviewStrip wallet={wallet} position={activePosition} trades={trades} realizedPnL={ledger.realizedPnL} risk={riskSettings} marketStatus={marketStatus} lastScanAt={lastScanAt} isAgentActive={isAgentActive} killSwitchActive={killSwitchActive} />
         {reportError && <div role="alert" className="rounded-xl border border-amber-700 bg-amber-950/40 p-3 text-xs text-amber-200">Report unavailable: {reportError}</div>}
         {marketError && <div role="alert" className="rounded-xl border border-rose-700/60 bg-rose-950/40 p-3 text-xs text-rose-200 flex flex-wrap justify-between items-center gap-2"><span>Market data error: {marketError}</span><button className="rounded-lg border border-rose-500/50 px-3 py-1.5 hover:bg-rose-900" onClick={fetchMarketTokens}>Retry</button></div>}
-        <AgentCommandPanel config={agentConfig} signal={latestSignal} onCommand={applyAgentCommand} />
-        {/* 1. The 14-Step AGENT LOOP Pipeline */}
-        <AgentLoopPipeline
-          currentStep={currentStep}
-          isAgentActive={isAgentActive}
-          onStepClick={(step) => {
-            addLog(step, `Inspecting phase [${step}]. Safety invariants active.`, 'info');
-          }}
-        />
-
-        {/* 2. THE $5 CASE STUDY HERO MODULE */}
-        <CaseStudyHero
-          wallet={wallet}
-          activePosition={activePosition}
-          totalTrades={ledger.closedCount}
-          winningTrades={ledger.wins}
-          realizedPnL={ledger.realizedPnL}
-          totalFeesUsd={ledger.totalFees}
-          avgSlippageBps={ledger.avgSlippageBps}
-          maxDrawdownPercent={maxDrawdownPercent}
-          expectancyUsd={expectancy}
-          targetAchieved={targetAchieved}
-          stoppedAtLoss={stoppedAtLoss}
-          onOpenCaseStudyModal={handleGenerateCaseStudy}
-        />
-
-        {/* 3. Command Center 3-Column Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
-          {/* Left Column: Wallet & 420 Module (4 cols) */}
-          <div className="lg:col-span-4 space-y-4">
-            <WalletCard
-              wallet={wallet}
-              activePosition={activePosition}
-              onRefreshBalance={() => {
-                addLog('OBSERVE', 'Refreshing Solana RPC balance...', 'info');
-              }}
-              onConnectWallet={() => setIsWalletModalOpen(true)}
-            />
-
-            <Meme420Module
-              onTriggerBurn={() => {
-                addLog('EXECUTE', '420 burn action is a dashboard demonstration; no on-chain burn was submitted.', 'trade');
-              }}
-            />
-
-            <ActivePositionCard
-              position={activePosition}
-              onEmergencyExit={() => closePosition('Manual emergency market exit by operator')}
-              isAgentActive={isAgentActive}
-            />
-          </div>
-
-          {/* Center Column: FOMO Signals & X Narrative Radar (4 cols) */}
-          <div className="lg:col-span-4 space-y-4">
-            <FomoAndXRadar
-              tokens={tokens}
-              selectedToken={selectedToken}
-              signal={latestSignal}
-              marketStatus={marketStatus}
-              xStatus={sources.xRadar.status}
-              lastScanAt={lastScanAt}
-              onSelectToken={(t) => {
-                setSelectedToken(t);
-                addLog('OBSERVE', `Focused on $${t.symbol}: 5m volume $${t.volume24h.toLocaleString()}, X Velocity ${t.xVelocity}/100.`, 'info');
-              }}
-            />
-          </div>
-
-          {/* Right Column: Live Opportunities & AI Thesis (4 cols) */}
-          <div className="lg:col-span-4 space-y-4">
+        {/* Primary workflow: identify an opportunity, inspect signals and monitor exposure. */}
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
+          <div className="xl:col-span-7 min-w-0" id="opportunities">
             <OpportunitiesTable
               tokens={tokens}
               selectedToken={selectedToken}
@@ -870,6 +803,62 @@ export default function App() {
               maxPositionSizeUsd={riskSettings.maxPositionSizeUsd}
               canExecute={wallet.connected && wallet.isSimulated && isFreshLiveMarket(marketStatus, lastScanAt) && !activePosition && !killSwitchActive && wallet.cashUsd >= 0.5}
             />
+          </div>
+          <div className="xl:col-span-5 min-w-0 space-y-4">
+            <FomoAndXRadar
+              tokens={tokens}
+              selectedToken={selectedToken}
+              signal={latestSignal}
+              marketStatus={marketStatus}
+              xStatus={sources.xRadar.status}
+              lastScanAt={lastScanAt}
+              onSelectToken={(token) => {
+                setSelectedToken(token);
+                addLog('OBSERVE', `Focused on $${token.symbol}: 24h volume $${token.volume24h.toLocaleString()}; price-derived velocity proxy ${token.xVelocity}/100.`, 'info');
+              }}
+            />
+            <ActivePositionCard
+              position={activePosition}
+              onEmergencyExit={() => closePosition('Manual emergency paper exit by operator')}
+              isAgentActive={isAgentActive}
+            />
+          </div>
+        </div>
+
+        <div id="agent"><AgentCommandPanel config={agentConfig} signal={latestSignal} onCommand={applyAgentCommand} /></div>
+        <AgentLoopPipeline
+          currentStep={currentStep}
+          isAgentActive={isAgentActive}
+          onStepClick={step => addLog(step, `Inspecting phase [${step}]. See terminal for observed events; pipeline is a clock visualization.`, 'info')}
+        />
+
+        <div id="portfolio" className="space-y-4">
+          <CaseStudyHero
+            wallet={wallet}
+            activePosition={activePosition}
+            totalTrades={ledger.closedCount}
+            winningTrades={ledger.wins}
+            realizedPnL={ledger.realizedPnL}
+            totalFeesUsd={ledger.totalFees}
+            avgSlippageBps={ledger.avgSlippageBps}
+            maxDrawdownPercent={maxDrawdownPercent}
+            expectancyUsd={expectancy}
+            targetAchieved={targetAchieved}
+            stoppedAtLoss={stoppedAtLoss}
+            onOpenCaseStudyModal={handleGenerateCaseStudy}
+          />
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            <div className="lg:col-span-7">
+              <WalletCard
+                wallet={wallet}
+                activePosition={activePosition}
+                onRefreshBalance={() => addLog('OBSERVE', 'Wallet balance refresh is unavailable: RPC balance fetching has not been implemented.', 'warning')}
+                onConnectWallet={() => setIsWalletModalOpen(true)}
+              />
+            </div>
+            <div className="lg:col-span-5">
+              <Meme420Module onTriggerBurn={() => addLog('OBSERVE', '420 community demo interaction; no tokens burned on-chain.', 'info')} />
+            </div>
           </div>
         </div>
 
