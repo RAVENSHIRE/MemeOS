@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dailySpendUsd, ledgerMetrics, remainingDailyLossBudget } from '../src/lib/trading';
+import { dailySpendUsd, estimatePaperBuy, estimatePaperSell, ledgerMetrics, remainingDailyLossBudget } from '../src/lib/trading';
 import { isFreshLiveMarket } from '../src/lib/api';
 import type { TradeRecord } from '../src/types';
 
@@ -52,4 +52,19 @@ test('only recent actual LIVE market observations authorize entries', () => {
   assert.equal(isFreshLiveMarket('LIVE', now - 61000, now), false);
   assert.equal(isFreshLiveMarket('LIVE', now + 1000, now), false);
   assert.equal(isFreshLiveMarket('LIVE', null, now), false);
+});
+
+test('paper buy applies adverse slippage and fee to token quantity', () => {
+  const fill = estimatePaperBuy(1.5, 1, 0.0025, 100);
+  assert.equal(fill.fillPriceUsd, 1.01);
+  assert.ok(fill.tokenAmount < 1.4975);
+  assert.ok(Math.abs(fill.tokenAmount * fill.fillPriceUsd + fill.feeUsd - 1.5) < 1e-10);
+});
+
+test('paper sell applies adverse slippage and fee to proceeds', () => {
+  const fill = estimatePaperSell(2, 1, 0.0025, 100);
+  assert.equal(fill.fillPriceUsd, 0.99);
+  assert.ok(Math.abs(fill.proceedsUsd - 1.9775) < 1e-10);
+  assert.throws(() => estimatePaperSell(2, 0));
+  assert.throws(() => estimatePaperBuy(0, 1));
 });
