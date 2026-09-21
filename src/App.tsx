@@ -231,7 +231,13 @@ export default function App() {
         setLastScanAt(Number.isFinite(data.fetchedAt) && (data.fetchedAt || 0) > 0 ? data.fetchedAt! : Date.now());
         setMarketError(null);
         setSources(prev => ({ ...prev, dexscreener: { ...prev.dexscreener, status: feedStatus }, xRadar: { ...prev.xRadar, status: data.feeds?.x ? 'LIVE' : 'DISCONNECTED' }, jupiter: { ...prev.jupiter, status: data.feeds?.jupiter ? 'LIVE' : 'DISCONNECTED' } }));
-        if (Array.isArray(data.tokens)) setTokens(uniqueTokens(data.tokens));
+        if (Array.isArray(data.tokens)) setTokens(prev => {
+          const analyzed = new Map(prev.filter(token => token.aiThesis).map(token => [token.address, token]));
+          return uniqueTokens(data.tokens).map(token => {
+            const prior = analyzed.get(token.address);
+            return prior ? { ...token, narrativeScore: prior.narrativeScore, aiThesis: prior.aiThesis, analysisSource: prior.analysisSource, viralVelocity: prior.viralVelocity, expectedUpside: prior.expectedUpside, recommendedAction: prior.recommendedAction } : token;
+          });
+        });
         if (data.config) setAgentConfig(data.config);
         if (Array.isArray(data.tokens) && activePosition) {
           const liveToken = data.tokens.find((token: TokenOpportunity) => token.address === activePosition.tokenAddress);
@@ -407,6 +413,7 @@ export default function App() {
                   ...t,
                   narrativeScore: data.narrativeScore,
                   aiThesis: data.aiThesis,
+                  analysisSource: data.source === 'LIVE' ? 'LIVE' : 'MOCK',
                   viralVelocity: data.viralVelocity,
                   expectedUpside: data.expectedUpside,
                   recommendedAction: data.recommendedAction,
