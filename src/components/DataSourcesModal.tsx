@@ -1,12 +1,11 @@
 import React from 'react';
 import { X, CheckCircle2, AlertTriangle, PowerOff, ShieldCheck, RefreshCw } from 'lucide-react';
-import { DataSourcesConfig, DataSourceStatus } from '../types';
+import { DataSourcesConfig } from '../types';
 
 interface Props {
   isOpen: boolean;
   onClose: () => void;
   sources: DataSourcesConfig;
-  onUpdateSourceStatus: (key: keyof DataSourcesConfig, status: DataSourceStatus) => void;
   onRefreshSources: () => void;
 }
 
@@ -14,7 +13,6 @@ export const DataSourcesModal: React.FC<Props> = ({
   isOpen,
   onClose,
   sources,
-  onUpdateSourceStatus,
   onRefreshSources,
 }) => {
   if (!isOpen) return null;
@@ -27,7 +25,7 @@ export const DataSourcesModal: React.FC<Props> = ({
             <ShieldCheck className="w-5 h-5 text-cyan-400" />
             <div>
               <h2 className="text-lg font-bold text-white tracking-wide">DATA SOURCES & INTEGRATION INTEGRITY</h2>
-              <p className="text-xs text-slate-400">Strict transparency rule: The agent never simulates data if a source is disconnected.</p>
+              <p className="text-xs text-slate-400">Observed adapter status. LIVE indicates a configured or responding adapter, not a guarantee that all downstream metrics are verified.</p>
             </div>
           </div>
           <button
@@ -67,38 +65,7 @@ export const DataSourcesModal: React.FC<Props> = ({
                   <p className="text-xs text-slate-400 mt-0.5">{item.info}</p>
                 </div>
 
-                <div className="flex items-center gap-1.5 self-end sm:self-center">
-                  <button
-                    onClick={() => onUpdateSourceStatus(key, 'LIVE')}
-                    className={`text-xs px-2.5 py-1 rounded font-medium transition ${
-                      isLive
-                        ? 'bg-emerald-600 text-white shadow'
-                        : 'bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700'
-                    }`}
-                  >
-                    LIVE
-                  </button>
-                  <button
-                    onClick={() => onUpdateSourceStatus(key, 'MOCK')}
-                    className={`text-xs px-2.5 py-1 rounded font-medium transition ${
-                      isMock
-                        ? 'bg-amber-600 text-white shadow'
-                        : 'bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700'
-                    }`}
-                  >
-                    MOCK
-                  </button>
-                  <button
-                    onClick={() => onUpdateSourceStatus(key, 'DISCONNECTED')}
-                    className={`text-xs px-2.5 py-1 rounded font-medium transition ${
-                      isDisconnected
-                        ? 'bg-rose-600 text-white shadow'
-                        : 'bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700'
-                    }`}
-                  >
-                    DISCONNECTED
-                  </button>
-                </div>
+                <span className="text-[10px] font-mono text-slate-500 self-end sm:self-center">Read-only status</span>
               </div>
             );
           })}
@@ -110,7 +77,7 @@ export const DataSourcesModal: React.FC<Props> = ({
             className="flex items-center gap-1.5 text-xs text-cyan-400 hover:text-cyan-300 font-medium px-3 py-1.5 rounded bg-cyan-950/40 border border-cyan-800/50 transition"
           >
             <RefreshCw className="w-3.5 h-3.5" />
-            Check Live Latencies
+            Refresh source statuses
           </button>
           <button
             onClick={onClose}
