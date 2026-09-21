@@ -10,7 +10,7 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '64kb' }));
 
 // Helper to clean JSON string from LLM responses
 function cleanAndParseJson<T>(rawText: string | undefined, fallback: T): T {
@@ -429,7 +429,7 @@ function buildSignals(tokens: any[]) {
     if (agentConfig.dailyRunners && priceFromHigh < 0.75 && priceFromHigh > 0.35 && volumeAcceleration >= 1.15) {
       score += 25; signalType = 'RUNNER'; reasons.push('drawdown and re-acceleration runner pattern');
     }
-    if (token.change5m >= 4 && token.xVelocity >= 85) { score += 15; signalType = 'FOMO'; reasons.push('fast social/momentum velocity'); }
+    if (token.change5m >= 4 && token.xVelocity >= 85) { score += 15; signalType = 'FOMO'; reasons.push('fast price-derived momentum proxy (not verified X activity)'); }
     if (agentConfig.maxMarketCapUsd && token.fdv > agentConfig.maxMarketCapUsd) score = 0;
     const samples = [...previous, { price: token.priceUsd, volume: token.volume24h, liquidity: token.liquidity, high, at: now }].slice(-24);
     history.set(key, samples);
@@ -461,11 +461,12 @@ app.post('/api/agent/config', (req, res) => {
 
 app.get('/api/agent/scan', async (_req, res) => {
   const now = Date.now();
+  try {
   if (marketCache.expiresAt <= now) {
-    const response = await fetch(`http://127.0.0.1:${PORT}/api/market/solana-tokens`).catch(() => null);
+    const response = await fetch(`http://127.0.0.1:${PORT}/api/market/solana-tokens`, { signal: AbortSignal.timeout(6500) }).catch(() => null);
     if (response?.ok) {
       const data = await response.json();
-      marketCache.tokens = Array.isArray(data.tokens) ? data.tokens : [];
+      marketCache.tokens = Array.isArray(data.tokens) ? data.tokens.filter((token: any) => typeof token?.address === 'string' && Number.isFinite(token.priceUsd) && token.priceUsd > 0 && Number.isFinite(token.liquidity)) : [];
       marketCache.source = data.source === 'LIVE' ? 'LIVE' : data.source === 'MOCK' ? 'MOCK' : 'DISCONNECTED';
       marketCache.fetchedAt = now;
       marketCache.expiresAt = now + 15000;
@@ -489,6 +490,7 @@ app.get('/api/agent/scan', async (_req, res) => {
   if (jupiterCache.expiresAt <= now && marketCache.tokens.length) {
     const ids = marketCache.tokens.map((token) => token.address).filter(Boolean).slice(0, 20).join(',');
     try {
+      jupiterCache.prices = {};
       const response = await fetch(`https://lite-api.jup.ag/price/v2?ids=${encodeURIComponent(ids)}`, { signal: AbortSignal.timeout(2500) });
       if (response.ok) {
         const data = await response.json();
@@ -502,16 +504,22 @@ app.get('/api/agent/scan', async (_req, res) => {
   const signals = marketCache.source === 'LIVE' ? buildSignals(marketCache.tokens) : [];
   persistHistory();
   const externalSignals = (marketCache.source === 'LIVE' ? externalCache.payload.responses : []).flatMap((payload: any) => Array.isArray(payload?.signals) ? payload.signals : []).map((event: any) => {
-    const token = marketCache.tokens.find((item) => item.address === event.tokenAddress || item.symbol === event.symbol);
+    const token = marketCache.tokens.find((item) => item.address === event.tokenAddress || (!event.tokenAddress && item.symbol === event.symbol));
     if (!token) return null;
     const source = String(event.source || event.trader || event.account || 'external');
     const mode = agentConfig.sourceModes[source] || (agentConfig.copiedWallets.includes(source) ? 'COPY' : 'SIGNAL');
     if (mode === 'FOLLOW') return null;
-    return { token, score: Math.max(Number(event.score) || 80, mode === 'COPY' ? 90 : 0), signalType: event.signalType === 'FOMO' ? 'FOMO' : 'MOMENTUM', reasons: [mode === 'COPY' ? `copy source ${source}` : `external signal ${source}`, ...(Array.isArray(event.reasons) ? event.reasons : [])], confidence: 0.95, detectedAt: now };
+    const rawScore = Number(event.score);
+    const score = Math.min(100, Math.max(mode === 'COPY' ? 90 : 0, Number.isFinite(rawScore) ? rawScore : 80));
+    return { token, score, signalType: event.signalType === 'FOMO' ? 'FOMO' : 'MOMENTUM', reasons: [mode === 'COPY' ? `copy source ${source}` : `external signal ${source}`, ...(Array.isArray(event.reasons) ? event.reasons.filter((reason: unknown) => typeof reason === 'string').slice(0, 5) : [])], confidence: score / 100, detectedAt: now };
   }).filter(Boolean);
   const freshSignals = [...externalSignals, ...signals].filter((signal) => now - (lastSignalAt.get(signal.token.address) || 0) > 30000);
   freshSignals.forEach((signal) => lastSignalAt.set(signal.token.address, now));
   res.json({ source: marketCache.source, fetchedAt: marketCache.fetchedAt, tokens: marketCache.tokens, signals: freshSignals.slice(0, 5), config: agentConfig, feeds: { dexScreener: marketCache.source === 'LIVE', jupiter: Object.keys(jupiterCache.prices).length > 0, x: Boolean(process.env.X_SIGNAL_URL), onChain: Boolean(process.env.ONCHAIN_SIGNAL_URL), pumpSwap: Boolean(process.env.PUMPSWAP_SIGNAL_URL) }, external: { configured: externalCache.payload.configured || 0, received: externalCache.payload.responses?.length || 0 }, cacheExpiresAt: Math.min(marketCache.expiresAt, jupiterCache.expiresAt || marketCache.expiresAt) });
+  } catch (error) {
+    console.error('Agent scan failed:', error);
+    res.status(503).json({ source: 'DISCONNECTED', tokens: [], signals: [], error: 'Agent scan temporarily unavailable' });
+  }
 });
 
 // Endpoint: Check system integration statuses
