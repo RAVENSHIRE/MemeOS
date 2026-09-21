@@ -47,6 +47,7 @@ export interface TokenOpportunity {
   icon: string;
   narrativeScore?: number;
   aiThesis?: string;
+  analysisSource?: 'LIVE' | 'MOCK';
   viralVelocity?: 'EXTREME' | 'HIGH' | 'MODERATE' | 'LOW';
   recommendedAction?: 'TRADE_CANDIDATE' | 'WATCHLIST' | 'REJECT';
   expectedUpside?: string;
