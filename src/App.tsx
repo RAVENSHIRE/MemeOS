@@ -20,7 +20,7 @@ import {
 
 import { HeaderBar } from './components/HeaderBar';
 import { OverviewStrip } from './components/OverviewStrip';
-import { apiRequest, isFreshLiveMarket, uniqueTokens, type MarketSnapshot } from './lib/api';
+import { apiRequest, isFreshLiveMarket, uniqueTokens, type MarketSnapshot, type XAdapterEvent } from './lib/api';
 import { dailySpendUsd, estimatePaperBuy, estimatePaperSell, ledgerMetrics, remainingDailyLossBudget } from './lib/trading';
 import { AgentLoopPipeline } from './components/AgentLoopPipeline';
 import { CaseStudyHero } from './components/CaseStudyHero';
@@ -101,6 +101,7 @@ export default function App() {
     maxOpenExposureUsd: 5, maxPositions: 1, maxHoldingDays: 120,
   });
   const [latestSignal, setLatestSignal] = useState<AgentSignal | null>(null);
+  const [xSignals, setXSignals] = useState<XAdapterEvent[]>([]);
   const [lastScanAt, setLastScanAt] = useState<number | null>(null);
   const [marketLoading, setMarketLoading] = useState(true);
   const [marketError, setMarketError] = useState<string | null>(null);
@@ -239,6 +240,7 @@ export default function App() {
           });
         });
         if (data.config) setAgentConfig(data.config);
+        setXSignals(Array.isArray(data.xSignals) ? data.xSignals : []);
         if (Array.isArray(data.tokens) && activePosition) {
           const liveToken = data.tokens.find((token: TokenOpportunity) => token.address === activePosition.tokenAddress);
           if (liveToken && Number.isFinite(liveToken.priceUsd)) {
@@ -266,6 +268,7 @@ export default function App() {
       } catch (error) {
         if (cancelled) return;
         setMarketStatus('DISCONNECTED');
+        setXSignals([]);
         setMarketError(error instanceof Error ? error.message : 'Scan unavailable');
         setSources(prev => ({ ...prev, dexscreener: { ...prev.dexscreener, status: 'DISCONNECTED' } }));
         addLog('MARKET_SCAN', `Agent scan unavailable: ${String(error)}. New entries disabled.`, 'warning');
@@ -811,6 +814,7 @@ export default function App() {
               signal={latestSignal}
               marketStatus={marketStatus}
               xStatus={sources.xRadar.status}
+              xSignals={xSignals}
               lastScanAt={lastScanAt}
               onSelectToken={(token) => {
                 setSelectedToken(token);
