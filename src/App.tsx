@@ -21,6 +21,7 @@ import {
 import { HeaderBar } from './components/HeaderBar';
 import { OverviewStrip } from './components/OverviewStrip';
 import { apiRequest, isFreshLiveMarket, uniqueTokens, type MarketSnapshot } from './lib/api';
+import { dailySpendUsd, ledgerMetrics, remainingDailyLossBudget } from './lib/trading';
 import { AgentLoopPipeline } from './components/AgentLoopPipeline';
 import { CaseStudyHero } from './components/CaseStudyHero';
 import { WalletCard } from './components/WalletCard';
@@ -113,6 +114,8 @@ export default function App() {
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [isAnalyzingToken, setIsAnalyzingToken] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const executeBuyTradeRef = useRef<(token: TokenOpportunity) => void>(() => {});
 
   const addLog = useCallback((step: AgentLoopStep, message: string, type: 'info' | 'success' | 'warning' | 'trade' | 'alert' = 'info') => {
     const newLog: TelemetryLog = {
@@ -172,7 +175,7 @@ export default function App() {
   const applyAgentCommand = useCallback(async (rawCommand: string) => {
     const command = rawCommand.trim();
     const lower = command.toLowerCase();
-    const next = { ...agentConfig };
+    const next = { ...agentConfig, sourceModes: { ...agentConfig.sourceModes } };
     const account = command.match(/follow\s+@?([a-z0-9_.-]+)/i)?.[1];
     const walletMatch = command.match(/copy\s+(?:this\s+)?wallet\s+([1-9a-zA-Z]{20,})/i);
     const fomoMatch = command.match(/(?:follow|copy)\s+(?:this\s+)?(?:fomo\s+)?trader\s+([\w.-]+)/i);
@@ -204,15 +207,14 @@ export default function App() {
     if (cap) next.maxMarketCapUsd = Number(cap) * 1_000_000;
     if (lower === 'sell' || lower.startsWith('sell ')) closePosition('Manual sell command');
     try {
-      const response = await fetch('/api/agent/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
-      if (!response.ok) throw new Error(`Command failed (${response.status})`);
-      const data = await response.json();
+      const data = await apiRequest<{ config: AgentConfig }>('/api/agent/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
       setAgentConfig(data.config);
       addLog('OBSERVE', `Command applied: ${command}`, 'success');
       if (lower.includes('show today') && lower.includes('runner')) addLog('MARKET_SCAN', 'Daily runner view is available in the latest signal stream.', 'info');
       if (lower.includes('why did you buy')) addLog('LEARN', latestSignal ? `Latest signal: ${latestSignal.reasons.join(', ')}.` : 'No autonomous purchase has been recorded.', 'info');
     } catch (error) {
       addLog('OBSERVE', `Command failed: ${String(error)}`, 'alert');
+      throw error;
     }
   }, [agentConfig, addLog, latestSignal]);
 
@@ -253,7 +255,7 @@ export default function App() {
         if (signal) {
           setLatestSignal(signal);
           addLog(signal.signalType === 'FOMO' ? 'FOMO_WATCHLIST' : 'TRADE_CANDIDATE', `${signal.signalType} signal $${signal.token.symbol}: ${signal.reasons.join(', ')}`, 'success');
-          if (feedStatus === 'LIVE' && riskSettings.autoExecute && !activePosition) executeBuyTrade(signal.token);
+          if (feedStatus === 'LIVE' && riskSettings.autoExecute && !activePosition) executeBuyTradeRef.current(signal.token);
         }
       } catch (error) {
         if (cancelled) return;
@@ -354,32 +356,34 @@ export default function App() {
 
   // Generate Case Study Report (via Gemini backend)
   const handleGenerateCaseStudy = async () => {
+    setReportError(null);
     setIsGeneratingReport(true);
     try {
       const finalStatus = targetAchieved ? 'TARGET_REACHED' : stoppedAtLoss ? 'STOP_LOSS_PRESERVED' : 'IN_PROGRESS';
+      const metrics = ledgerMetrics(trades);
       const sessionStats = {
         equity: wallet.equity,
-        realizedPnL,
-        totalFees: totalFeesUsd,
-        winRate: trades.length > 0 ? ((winningTradesCount / trades.length) * 100).toFixed(1) : '0.0',
-        expectancy: trades.length > 0 ? realizedPnL / trades.length : 0,
-        slippageBps: avgSlippageBps,
+        realizedPnL: metrics.realizedPnL,
+        totalFees: metrics.totalFees,
+        winRate: metrics.winRate.toFixed(1),
+        expectancy: metrics.expectancy,
+        slippageBps: metrics.avgSlippageBps,
         maxDrawdown: maxDrawdownPercent.toFixed(1),
       };
 
-      const res = await fetch('/api/case-study/generate', {
+      const data = await apiRequest<{ report: CaseStudyReport }>('/api/case-study/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionStats, trades, finalStatus }),
-      });
-      if (!res.ok) throw new Error(`Case study request failed (${res.status})`);
-      const data = await res.json();
+      }, 20000);
       if (data && data.report) {
         setCaseStudyReport(data.report);
       }
       setIsCaseStudyOpen(true);
     } catch (err) {
       console.error('Error generating case study:', err);
+      setReportError(err instanceof Error ? err.message : 'Case study unavailable');
+      setIsCaseStudyOpen(true);
     } finally {
       setIsGeneratingReport(false);
     }
@@ -390,13 +394,11 @@ export default function App() {
     setIsAnalyzingToken(true);
     addLog('NARRATIVE_PROOF', `Requesting Gemini AI conviction analysis for $${token.symbol}...`, 'info');
     try {
-      const res = await fetch('/api/gemini/analyze-narrative', {
+      const data = await apiRequest<{ narrativeScore: number; aiThesis?: string; viralVelocity?: TokenOpportunity['viralVelocity']; expectedUpside?: string; recommendedAction?: TokenOpportunity['recommendedAction']; source?: string }>('/api/gemini/analyze-narrative', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token }),
-      });
-      if (!res.ok) throw new Error(`Narrative analysis failed (${res.status})`);
-      const data = await res.json();
+      }, 20000);
       if (data && Number.isFinite(data.narrativeScore)) {
         setTokens((prev) =>
           prev.map((t) =>
@@ -420,7 +422,7 @@ export default function App() {
       }
     } catch (err) {
       console.error('AI Analysis failed:', err);
-      addLog('NARRATIVE_PROOF', `AI analysis unavailable for $${token.symbol}; no order was placed.`, 'warning');
+      addLog('NARRATIVE_PROOF', `AI analysis unavailable for ${token.symbol}: ${err instanceof Error ? err.message : 'Unknown error'}. No order was placed.`, 'warning');
     } finally {
       setIsAnalyzingToken(false);
     }
@@ -444,16 +446,12 @@ export default function App() {
       addLog('RISK_CHECK', `Cannot execute buy: Active position $${activePosition.tokenSymbol} already open. Max 1 active position per risk limits.`, 'warning');
       return;
     }
-    if (realizedPnL <= -riskSettings.maxDailyLossUsd) {
+    if (remainingDailyLossBudget(riskSettings.maxDailyLossUsd, realizedPnL) <= 0) {
       addLog('RISK_CHECK', `Daily loss limit of $${riskSettings.maxDailyLossUsd.toFixed(2)} reached. New entries blocked.`, 'alert');
       return;
     }
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-    const dailySpend = trades
-      .filter((trade) => trade.type === 'BUY' && trade.timestamp >= startOfDay.getTime())
-      .reduce((sum, trade) => sum + trade.totalUsd, 0);
-    if (dailySpend >= agentConfig.maxDailySpendUsd) {
+    const dailySpend = dailySpendUsd(trades);
+    if (dailySpend + Math.min(riskSettings.maxPositionSizeUsd, wallet.cashUsd) > agentConfig.maxDailySpendUsd) {
       addLog('RISK_CHECK', `Daily spend limit of $${agentConfig.maxDailySpendUsd.toFixed(2)} reached.`, 'alert');
       return;
     }
@@ -462,7 +460,11 @@ export default function App() {
       addLog('RISK_CHECK', `Entry blocked for $${token.symbol}: score, rug safety, or liquidity threshold failed.`, 'warning');
       return;
     }
-    const tradeSizeUsd = Math.min(riskSettings.maxPositionSizeUsd, wallet.cashUsd);
+    const tradeSizeUsd = Math.min(riskSettings.maxPositionSizeUsd, agentConfig.positionSizeUsd, wallet.cashUsd);
+    if (!Number.isFinite(token.priceUsd) || token.priceUsd <= 0 || !Number.isFinite(token.liquidity)) {
+      addLog('RISK_CHECK', 'Entry blocked: market quote or liquidity invalid.', 'alert');
+      return;
+    }
     if (wallet.positionsValue + tradeSizeUsd > agentConfig.maxOpenExposureUsd) {
       addLog('RISK_CHECK', `Open exposure limit of $${agentConfig.maxOpenExposureUsd.toFixed(2)} would be exceeded.`, 'alert');
       return;
@@ -542,6 +544,8 @@ export default function App() {
       'trade'
     );
   };
+
+  executeBuyTradeRef.current = executeBuyTrade;
 
   // Close Position (Sell)
   const closePosition = useCallback((reason: string) => {
@@ -751,7 +755,8 @@ export default function App() {
     addLog('CONNECT', 'Reset $5 Case Study: Fresh $5.00 capital loaded. Target: $10.00.', 'trade');
   };
 
-  const expectancy = trades.length > 0 ? realizedPnL / trades.length : 0;
+  const ledger = ledgerMetrics(trades);
+  const expectancy = ledger.expectancy;
 
   return (
     <div className="min-h-screen bg-[#070a12] text-slate-100 font-sans selection:bg-cyan-500 selection:text-black">
@@ -774,7 +779,8 @@ export default function App() {
 
       {/* Main Single-Screen Command Center */}
       <main className="max-w-[1600px] mx-auto p-4 sm:p-6 space-y-5 dashboard-glow">
-        <OverviewStrip wallet={wallet} position={activePosition} trades={trades} realizedPnL={realizedPnL} risk={riskSettings} marketStatus={marketStatus} lastScanAt={lastScanAt} isAgentActive={isAgentActive} killSwitchActive={killSwitchActive} />
+        <OverviewStrip wallet={wallet} position={activePosition} trades={trades} realizedPnL={ledger.realizedPnL} risk={riskSettings} marketStatus={marketStatus} lastScanAt={lastScanAt} isAgentActive={isAgentActive} killSwitchActive={killSwitchActive} />
+        {reportError && <div role="alert" className="rounded-xl border border-amber-700 bg-amber-950/40 p-3 text-xs text-amber-200">Report unavailable: {reportError}</div>}
         {marketError && <div role="alert" className="rounded-xl border border-rose-700/60 bg-rose-950/40 p-3 text-xs text-rose-200 flex flex-wrap justify-between items-center gap-2"><span>Market data error: {marketError}</span><button className="rounded-lg border border-rose-500/50 px-3 py-1.5 hover:bg-rose-900" onClick={fetchMarketTokens}>Retry</button></div>}
         <AgentCommandPanel config={agentConfig} signal={latestSignal} onCommand={applyAgentCommand} />
         {/* 1. The 14-Step AGENT LOOP Pipeline */}
@@ -791,10 +797,10 @@ export default function App() {
           wallet={wallet}
           activePosition={activePosition}
           totalTrades={trades.length}
-          winningTrades={winningTradesCount}
-          realizedPnL={realizedPnL}
-          totalFeesUsd={totalFeesUsd}
-          avgSlippageBps={avgSlippageBps}
+          winningTrades={ledger.wins}
+          realizedPnL={ledger.realizedPnL}
+          totalFeesUsd={ledger.totalFees}
+          avgSlippageBps={ledger.avgSlippageBps}
           maxDrawdownPercent={maxDrawdownPercent}
           expectancyUsd={expectancy}
           targetAchieved={targetAchieved}
