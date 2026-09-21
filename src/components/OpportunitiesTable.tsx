@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Sparkles,
   ShieldCheck,
@@ -21,6 +21,8 @@ interface Props {
   onAnalyzeWithAI: (token: TokenOpportunity) => void;
   isAnalyzing: boolean;
   canExecute: boolean;
+  maxPositionSizeUsd: number;
+  isLoading: boolean;
 }
 
 export const OpportunitiesTable: React.FC<Props> = ({
@@ -31,7 +33,12 @@ export const OpportunitiesTable: React.FC<Props> = ({
   onAnalyzeWithAI,
   isAnalyzing,
   canExecute,
+  maxPositionSizeUsd,
+  isLoading,
 }) => {
+  const [query, setQuery] = useState('');
+  const [sort, setSort] = useState<'volume' | 'liquidity' | 'momentum'>('volume');
+  const visible = useMemo(() => tokens.filter(token => `${token.symbol} ${token.name} ${token.address}`.toLowerCase().includes(query.toLowerCase().trim())).sort((a, b) => sort === 'volume' ? b.volume24h - a.volume24h : sort === 'liquidity' ? b.liquidity - a.liquidity : b.change5m - a.change5m), [tokens, query, sort]);
   return (
     <div className="bg-[#0b101c] border border-slate-800 rounded-xl p-4 shadow-lg text-slate-100 flex flex-col h-full">
       {/* Header */}
@@ -46,24 +53,32 @@ export const OpportunitiesTable: React.FC<Props> = ({
                 LIVE OPPORTUNITIES & AI THESIS
               </span>
               <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-400 border border-cyan-800/40">
-                GEMINI POWERED
+                AI / HEURISTIC
               </span>
             </div>
             <p className="text-[10px] font-mono text-slate-400">
-              Ranked by Narrative Strength Score, Liquidity Depth & Rug Risk
+              Market opportunities · heuristic scores are not verified safety guarantees
             </p>
           </div>
         </div>
       </div>
 
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <label htmlFor="opportunity-search" className="sr-only">Search opportunities by name, symbol or address</label>
+        <input id="opportunity-search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search symbol or address" className="min-w-0 flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-cyan-400" />
+        <label htmlFor="opportunity-sort" className="sr-only">Sort opportunities</label>
+        <select id="opportunity-sort" value={sort} onChange={e => setSort(e.target.value as typeof sort)} className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-xs text-slate-200"><option value="volume">24h volume</option><option value="liquidity">Liquidity</option><option value="momentum">5m momentum</option></select>
+      </div>
       {/* Opportunities List */}
       <div className="mt-3 flex-1 overflow-y-auto space-y-2.5 max-h-[460px] pr-1 scrollbar-thin">
-        {tokens.map((token, idx) => {
+        {isLoading && tokens.length === 0 && <div role="status" aria-label="Loading market opportunities" className="space-y-3 animate-pulse">{[0, 1, 2].map(n => <div key={n} className="h-28 rounded-xl bg-slate-800/70" />)}</div>}
+        {!isLoading && visible.length === 0 && <p role="status" className="text-sm text-slate-400 p-4">{tokens.length ? 'No opportunities match your search.' : 'No market opportunities available. Check data source status.'}</p>}
+        {visible.map((token, idx) => {
           const isSelected =
             selectedToken?.address && token.address
               ? selectedToken.address === token.address
               : selectedToken?.symbol === token.symbol;
-          const score = token.narrativeScore || token.xVelocity || 80;
+          const score = token.narrativeScore ?? token.xVelocity;
           const isSafe = token.rugScore >= 85;
           const tokenKey = `opp-token-${token.address || token.symbol}-${idx}`;
 
@@ -132,10 +147,10 @@ export const OpportunitiesTable: React.FC<Props> = ({
                     }`}
                   >
                     <Flame className="w-3.5 h-3.5 text-amber-400" />
-                    <span>SCORE: {score}/100</span>
+                    <span>{token.narrativeScore == null ? 'HEURISTIC' : 'NARRATIVE'}: {score}/100</span>
                   </div>
 
-                  {/* Rug Risk Badge */}
+                  {/* Liquidity-based risk proxy; token security is not independently verified. */}
                   <div
                     className={`flex items-center gap-1 px-2 py-1 rounded-lg border font-mono text-[10px] font-bold ${
                       isSafe
@@ -144,7 +159,7 @@ export const OpportunitiesTable: React.FC<Props> = ({
                     }`}
                   >
                     {isSafe ? <ShieldCheck className="w-3 h-3 text-emerald-400" /> : <ShieldAlert className="w-3 h-3 text-amber-400" />}
-                    <span>{token.riskLevel} RISK</span>
+                    <span>{token.riskLevel} · EST.</span>
                   </div>
                 </div>
               </div>
@@ -166,7 +181,7 @@ export const OpportunitiesTable: React.FC<Props> = ({
                 <div>
                   <span className="text-slate-500 block uppercase">Top 10 Holders</span>
                   <span className="text-emerald-400 font-bold">
-                    {token.top10HoldingPercent}% (Decentralized)
+                    {token.top10HoldingPercent > 0 && token.analysisSource === 'LIVE' ? `${token.top10HoldingPercent}% (reported)` : 'Unavailable'}
                   </span>
                 </div>
               </div>
@@ -175,20 +190,22 @@ export const OpportunitiesTable: React.FC<Props> = ({
               <div className="bg-[#090d16] border border-cyan-500/20 rounded-lg p-2.5">
                 <div className="flex items-center gap-1.5 text-[10px] font-mono text-cyan-400 uppercase font-bold mb-1">
                   <Sparkles className="w-3 h-3" />
-                  <span>AI Thesis & Memetic Conviction:</span>
+                  <span>{token.analysisSource === 'LIVE' ? 'Gemini narrative analysis' : token.analysisSource === 'MOCK' ? 'Heuristic narrative (no AI)' : 'Market narrative (unverified)'}:</span>
                 </div>
                 <p className="text-xs text-slate-300 leading-relaxed">
                   {token.aiThesis || token.narrative}
                 </p>
-                {token.expectedUpside && (
+                {token.expectedUpside && token.expectedUpside !== 'Not estimated' && (
                   <div className="mt-1 text-[10px] font-mono text-emerald-400">
-                    Expected Upside: {token.expectedUpside}
+                    Model scenario (unverified): {token.expectedUpside}
                   </div>
                 )}
               </div>
 
+              <p className="text-[10px] text-amber-300">Risk indicator is a liquidity-based heuristic; mint/freeze authorities and holder concentration have not been verified by this feed.</p>
               {/* Row 4: Action Controls */}
-              <div className="flex items-center justify-between pt-1">
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                <button type="button" onClick={() => { onSelectToken(token); document.getElementById('token-inspector')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="text-xs rounded-lg border border-slate-700 px-3 py-1.5 text-slate-200 hover:border-cyan-600">Inspect</button>
                 <button
                   onClick={() => onAnalyzeWithAI(token)}
                   disabled={isAnalyzing}
@@ -208,7 +225,7 @@ export const OpportunitiesTable: React.FC<Props> = ({
                   }`}
                 >
                   <Zap className="w-3 h-3 fill-current" />
-                  <span>Snipe Trade ($1.50)</span>
+                  <span>Paper buy (up to ${maxPositionSizeUsd.toFixed(2)})</span>
                 </button>
               </div>
             </div>

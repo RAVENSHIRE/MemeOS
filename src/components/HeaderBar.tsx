@@ -46,7 +46,7 @@ export const HeaderBar: React.FC<Props> = ({
   stoppedAtLoss,
 }) => {
   return (
-    <header className="border-b border-slate-800 bg-[#0a0e17]/95 backdrop-blur sticky top-0 z-40 px-4 py-3">
+    <header className="border-b border-slate-800 bg-[#0a0e17]/95 backdrop-blur sticky top-0 z-40 px-4 py-3 shadow-lg shadow-black/10">
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-3">
         {/* Left: Branding & Tagline */}
         <div className="flex items-center gap-3">
@@ -75,10 +75,11 @@ export const HeaderBar: React.FC<Props> = ({
         </div>
 
         {/* Center: Data Sources Integrity Ribbon (Clickable) */}
-        <div
+        <button type="button"
           onClick={onOpenDataSources}
           className="cursor-pointer bg-slate-900/90 border border-slate-800 hover:border-slate-700 px-3 py-1.5 rounded-lg flex items-center gap-2.5 transition group"
-          title="Click to inspect and toggle live data sources"
+          aria-label="Inspect live data source statuses"
+          title="Inspect observed data source statuses"
         >
           <span className="text-[10px] font-mono uppercase text-slate-400 flex items-center gap-1 font-semibold">
             <Activity className="w-3 h-3 text-cyan-400" />
@@ -108,7 +109,7 @@ export const HeaderBar: React.FC<Props> = ({
               );
             })}
           </div>
-        </div>
+        </button>
 
         {/* Right: Wallet & Master GO Action */}
         <div className="flex items-center gap-2.5 flex-wrap">
@@ -117,6 +118,7 @@ export const HeaderBar: React.FC<Props> = ({
             onClick={onOpenSettings}
             className="p-2 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300 hover:text-white transition"
             title="Configure Autonomous Risk Parameters"
+            aria-label="Risk settings"
           >
             <Sliders className="w-4 h-4" />
           </button>
@@ -175,6 +177,7 @@ export const HeaderBar: React.FC<Props> = ({
               onClick={onKillSwitch}
               className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg bg-rose-950/70 hover:bg-rose-900 border border-rose-700/60 text-rose-300 text-[10px] font-bold transition"
               title="Immediately halt the agent and exit the paper position"
+              aria-label="Activate trading kill switch"
             >
               KILL SWITCH
             </button>
@@ -219,6 +222,9 @@ export const HeaderBar: React.FC<Props> = ({
           )}
         </div>
       </div>
+      <nav aria-label="Dashboard sections" className="max-w-7xl mx-auto flex items-center gap-1.5 overflow-x-auto mt-3 pt-2 border-t border-slate-800/80">
+        {[['Overview', '#overview'], ['Markets', '#opportunities'], ['Agent', '#agent'], ['Portfolio', '#portfolio'], ['Activity', '#activity']].map(([label, href]) => <a key={href} href={href} className="shrink-0 rounded-md px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-cyan-200 hover:bg-slate-800 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400">{label}</a>)}
+      </nav>
     </header>
   );
 };

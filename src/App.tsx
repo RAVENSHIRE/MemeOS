@@ -19,6 +19,10 @@ import {
 } from './types';
 
 import { HeaderBar } from './components/HeaderBar';
+import { OverviewStrip } from './components/OverviewStrip';
+import { TokenInspector } from './components/TokenInspector';
+import { apiRequest, isFreshLiveMarket, uniqueTokens, type MarketSnapshot, type XAdapterEvent } from './lib/api';
+import { dailySpendUsd, estimatePaperBuy, estimatePaperSell, ledgerMetrics, remainingDailyLossBudget } from './lib/trading';
 import { AgentLoopPipeline } from './components/AgentLoopPipeline';
 import { CaseStudyHero } from './components/CaseStudyHero';
 import { WalletCard } from './components/WalletCard';
@@ -47,11 +51,11 @@ const DEFAULT_RISK_SETTINGS: AgentRiskSettings = {
 export default function App() {
   // 1. Data Sources Status
   const [sources, setSources] = useState<DataSourcesConfig>({
-    dexscreener: { status: 'LIVE', name: 'DexScreener API', info: 'Live Solana DEX pair search & token-profiles' },
-    solanaRpc: { status: 'LIVE', name: 'Solana RPC Gateway', info: 'Mainnet-beta slot cluster & keypair manager' },
+    dexscreener: { status: 'DISCONNECTED', name: 'DexScreener API', info: 'Live Solana DEX pair search & token-profiles' },
+    solanaRpc: { status: 'DISCONNECTED', name: 'Solana RPC Gateway', info: 'Mainnet-beta slot cluster & keypair manager' },
     xRadar: { status: 'DISCONNECTED', name: 'X Memetic Stream Radar', info: 'Configure X_SIGNAL_URL to enable monitored-account events' },
-    gemini: { status: 'LIVE', name: 'Gemini Intelligence Engine', info: 'AI thesis validation & narrative scoring' },
-    jupiter: { status: 'LIVE', name: 'Jupiter Swap Router', info: 'Ultra-low slippage Solana routing & fee optimizer' },
+    gemini: { status: 'DISCONNECTED', name: 'Gemini Intelligence Engine', info: 'AI thesis validation & narrative scoring' },
+    jupiter: { status: 'DISCONNECTED', name: 'Jupiter Swap Router', info: 'Ultra-low slippage Solana routing & fee optimizer' },
   });
 
   // 2. Wallet State
@@ -81,8 +85,8 @@ export default function App() {
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [realizedPnL, setRealizedPnL] = useState(0);
   const [totalFeesUsd, setTotalFeesUsd] = useState(0);
-  const [avgSlippageBps, setAvgSlippageBps] = useState(48);
-  const [maxDrawdownPercent, setMaxDrawdownPercent] = useState(4.2);
+  const [avgSlippageBps, setAvgSlippageBps] = useState(0);
+  const [maxDrawdownPercent, setMaxDrawdownPercent] = useState(0);
   const [peakEquity, setPeakEquity] = useState(5.0);
   const [winningTradesCount, setWinningTradesCount] = useState(0);
   const [caseStudyReport, setCaseStudyReport] = useState<CaseStudyReport | null>(null);
@@ -98,6 +102,11 @@ export default function App() {
     maxOpenExposureUsd: 5, maxPositions: 1, maxHoldingDays: 120,
   });
   const [latestSignal, setLatestSignal] = useState<AgentSignal | null>(null);
+  const [xSignals, setXSignals] = useState<XAdapterEvent[]>([]);
+  const [lastScanAt, setLastScanAt] = useState<number | null>(null);
+  const [marketLoading, setMarketLoading] = useState(true);
+  const [marketError, setMarketError] = useState<string | null>(null);
+  const [marketStatus, setMarketStatus] = useState<'LIVE' | 'MOCK' | 'DISCONNECTED'>('DISCONNECTED');
 
   // 7. Modals
   const [isDataSourcesOpen, setIsDataSourcesOpen] = useState(false);
@@ -107,6 +116,8 @@ export default function App() {
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [isAnalyzingToken, setIsAnalyzingToken] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const executeBuyTradeRef = useRef<(token: TokenOpportunity) => void>(() => {});
 
   const addLog = useCallback((step: AgentLoopStep, message: string, type: 'info' | 'success' | 'warning' | 'trade' | 'alert' = 'info') => {
     const newLog: TelemetryLog = {
@@ -119,52 +130,54 @@ export default function App() {
     setLogs((prev) => [...prev.slice(-120), newLog]);
   }, []);
 
-  // Fetch initial market tokens
+  // Initial market view: one source of truth for identity, provenance and loading state.
   const fetchMarketTokens = useCallback(async () => {
+    setMarketLoading(true);
+    setMarketError(null);
     try {
-      const res = await fetch('/api/market/solana-tokens');
-      if (!res.ok) throw new Error(`Market data request failed (${res.status})`);
-      const data = await res.json();
-      if (data && Array.isArray(data.tokens)) {
-        const seenSymbols = new Set<string>();
-        const seenAddresses = new Set<string>();
-        const uniqueTokens: TokenOpportunity[] = [];
-        for (const t of data.tokens) {
-          const sym = (t.symbol || '').toUpperCase().trim();
-          const addr = (t.address || '').trim();
-          if (!sym) continue;
-          if (seenSymbols.has(sym)) continue;
-          if (addr && seenAddresses.has(addr)) continue;
-          seenSymbols.add(sym);
-          if (addr) seenAddresses.add(addr);
-          uniqueTokens.push(t);
-        }
+      const data = await apiRequest<MarketSnapshot>('/api/market/solana-tokens');
+      const live = data.source === 'LIVE';
+      const nextTokens = uniqueTokens(Array.isArray(data.tokens) ? data.tokens : []);
+      setTokens(nextTokens);
+      setSelectedToken(prev => nextTokens.find(t => t.address === prev?.address) || nextTokens[0] || null);
+      setMarketStatus(live ? 'LIVE' : data.source === 'MOCK' ? 'MOCK' : 'DISCONNECTED');
+      setLastScanAt(Date.now());
+      setSources(s => ({ ...s, dexscreener: { ...s.dexscreener, status: live ? 'LIVE' : data.source === 'MOCK' ? 'MOCK' : 'DISCONNECTED' } }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Market feed unavailable';
+      setMarketError(message);
+      setMarketStatus('DISCONNECTED');
+      setSources(s => ({ ...s, dexscreener: { ...s.dexscreener, status: 'DISCONNECTED' } }));
+      addLog('MARKET_SCAN', `Market data unavailable: ${message}. New entries disabled.`, 'alert');
+    } finally {
+      setMarketLoading(false);
+    }
+  }, [addLog]);
 
-        setTokens(uniqueTokens);
-        setSelectedToken((prev) => prev || (uniqueTokens.length > 0 ? uniqueTokens[0] : null));
-        if (data.source === 'LIVE') {
-          setSources((s) => ({ ...s, dexscreener: { ...s.dexscreener, status: 'LIVE' } }));
-        } else {
-          setSources((s) => ({ ...s, dexscreener: { ...s.dexscreener, status: 'MOCK' } }));
-        }
-      }
-    } catch (err) {
-      console.error('Failed to fetch tokens:', err);
-      setSources((s) => ({ ...s, dexscreener: { ...s.dexscreener, status: 'DISCONNECTED' } }));
-      addLog('MARKET_SCAN', 'Market data unavailable; no new entries will be authorized.', 'alert');
+  // Integration badges report actual adapter observations, not manually selected values.
+  const refreshSourceStatuses = useCallback(async () => {
+    try {
+      const status = await apiRequest<Record<string, { status?: string }>>('/api/market/sources-status');
+      setSources(prev => Object.fromEntries(Object.entries(prev).map(([key, value]) => [key, {
+        ...(value as DataSourcesConfig[keyof DataSourcesConfig]),
+        status: key === 'dexscreener' ? (value as DataSourcesConfig[keyof DataSourcesConfig]).status : ['LIVE', 'MOCK', 'DISCONNECTED'].includes(status[key]?.status) ? status[key].status : 'DISCONNECTED',
+      }])) as unknown as DataSourcesConfig);
+    } catch {
+      setSources(prev => Object.fromEntries(Object.entries(prev).map(([key, value]) => [key, { ...(value as DataSourcesConfig[keyof DataSourcesConfig]), status: key === 'dexscreener' ? (value as DataSourcesConfig[keyof DataSourcesConfig]).status : 'DISCONNECTED' }])) as unknown as DataSourcesConfig);
     }
   }, []);
 
   // Initial load
   useEffect(() => {
     fetchMarketTokens();
+    refreshSourceStatuses();
     addLog('CONNECT', 'MEME OS boot sequence initialized. Waiting for Phantom wallet connection.', 'info');
-  }, [fetchMarketTokens, addLog]);
+  }, [fetchMarketTokens, refreshSourceStatuses, addLog]);
 
   const applyAgentCommand = useCallback(async (rawCommand: string) => {
     const command = rawCommand.trim();
     const lower = command.toLowerCase();
-    const next = { ...agentConfig };
+    const next = { ...agentConfig, sourceModes: { ...agentConfig.sourceModes } };
     const account = command.match(/follow\s+@?([a-z0-9_.-]+)/i)?.[1];
     const walletMatch = command.match(/copy\s+(?:this\s+)?wallet\s+([1-9a-zA-Z]{20,})/i);
     const fomoMatch = command.match(/(?:follow|copy)\s+(?:this\s+)?(?:fomo\s+)?trader\s+([\w.-]+)/i);
@@ -196,15 +209,14 @@ export default function App() {
     if (cap) next.maxMarketCapUsd = Number(cap) * 1_000_000;
     if (lower === 'sell' || lower.startsWith('sell ')) closePosition('Manual sell command');
     try {
-      const response = await fetch('/api/agent/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
-      if (!response.ok) throw new Error(`Command failed (${response.status})`);
-      const data = await response.json();
+      const data = await apiRequest<{ config: AgentConfig }>('/api/agent/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
       setAgentConfig(data.config);
       addLog('OBSERVE', `Command applied: ${command}`, 'success');
       if (lower.includes('show today') && lower.includes('runner')) addLog('MARKET_SCAN', 'Daily runner view is available in the latest signal stream.', 'info');
       if (lower.includes('why did you buy')) addLog('LEARN', latestSignal ? `Latest signal: ${latestSignal.reasons.join(', ')}.` : 'No autonomous purchase has been recorded.', 'info');
     } catch (error) {
       addLog('OBSERVE', `Command failed: ${String(error)}`, 'alert');
+      throw error;
     }
   }, [agentConfig, addLog, latestSignal]);
 
@@ -214,12 +226,22 @@ export default function App() {
     let cancelled = false;
     const scan = async () => {
       try {
-        const response = await fetch('/api/agent/scan');
-        if (!response.ok) return;
-        const data = await response.json();
+        const data = await apiRequest<MarketSnapshot & { config?: AgentConfig; feeds?: { x?: boolean; jupiter?: boolean } }>('/api/agent/scan', {}, 9000);
         if (cancelled) return;
-        if (Array.isArray(data.tokens) && data.tokens.length) setTokens(data.tokens);
+        const feedStatus = data.source === 'LIVE' ? 'LIVE' : data.source === 'MOCK' ? 'MOCK' : 'DISCONNECTED';
+        setMarketStatus(feedStatus);
+        setLastScanAt(Number.isFinite(data.fetchedAt) && (data.fetchedAt || 0) > 0 ? data.fetchedAt! : Date.now());
+        setMarketError(null);
+        setSources(prev => ({ ...prev, dexscreener: { ...prev.dexscreener, status: feedStatus }, xRadar: { ...prev.xRadar, status: data.feeds?.x ? 'LIVE' : 'DISCONNECTED' }, jupiter: { ...prev.jupiter, status: data.feeds?.jupiter ? 'LIVE' : 'DISCONNECTED' } }));
+        if (Array.isArray(data.tokens)) setTokens(prev => {
+          const analyzed = new Map<string, TokenOpportunity>(prev.filter(token => token.aiThesis).map(token => [token.address, token] as const));
+          return uniqueTokens(data.tokens).map(token => {
+            const prior = analyzed.get(token.address);
+            return prior ? { ...token, narrativeScore: prior.narrativeScore, aiThesis: prior.aiThesis, analysisSource: prior.analysisSource, viralVelocity: prior.viralVelocity, expectedUpside: prior.expectedUpside, recommendedAction: prior.recommendedAction } : token;
+          });
+        });
         if (data.config) setAgentConfig(data.config);
+        setXSignals(Array.isArray(data.xSignals) ? data.xSignals : []);
         if (Array.isArray(data.tokens) && activePosition) {
           const liveToken = data.tokens.find((token: TokenOpportunity) => token.address === activePosition.tokenAddress);
           if (liveToken && Number.isFinite(liveToken.priceUsd)) {
@@ -238,19 +260,30 @@ export default function App() {
             });
           }
         }
-        const signal = data.signals?.[0] as AgentSignal | undefined;
+        const signal = data.signals?.[0];
         if (signal) {
           setLatestSignal(signal);
           addLog(signal.signalType === 'FOMO' ? 'FOMO_WATCHLIST' : 'TRADE_CANDIDATE', `${signal.signalType} signal $${signal.token.symbol}: ${signal.reasons.join(', ')}`, 'success');
-          if (riskSettings.autoExecute && !activePosition) executeBuyTrade(signal.token);
+          if (feedStatus === 'LIVE' && riskSettings.autoExecute && !activePosition) executeBuyTradeRef.current(signal.token);
         }
       } catch (error) {
-        addLog('MARKET_SCAN', `Agent scan unavailable: ${String(error)}`, 'warning');
+        if (cancelled) return;
+        setMarketStatus('DISCONNECTED');
+        setXSignals([]);
+        setMarketError(error instanceof Error ? error.message : 'Scan unavailable');
+        setSources(prev => ({ ...prev, dexscreener: { ...prev.dexscreener, status: 'DISCONNECTED' } }));
+        addLog('MARKET_SCAN', `Agent scan unavailable: ${String(error)}. New entries disabled.`, 'warning');
       }
     };
-    scan();
-    const timer = setInterval(scan, 5000);
-    return () => { cancelled = true; clearInterval(timer); };
+    // Recursive timeout avoids concurrent requests during slow upstream responses.
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      if (cancelled) return;
+      await scan();
+      if (!cancelled) timer = setTimeout(poll, 5000);
+    };
+    void poll();
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [isAgentActive, killSwitchActive, activePosition]);
 
   // Connect Real Phantom Wallet
@@ -333,32 +366,34 @@ export default function App() {
 
   // Generate Case Study Report (via Gemini backend)
   const handleGenerateCaseStudy = async () => {
+    setReportError(null);
     setIsGeneratingReport(true);
     try {
       const finalStatus = targetAchieved ? 'TARGET_REACHED' : stoppedAtLoss ? 'STOP_LOSS_PRESERVED' : 'IN_PROGRESS';
+      const metrics = ledgerMetrics(trades);
       const sessionStats = {
         equity: wallet.equity,
-        realizedPnL,
-        totalFees: totalFeesUsd,
-        winRate: trades.length > 0 ? ((winningTradesCount / trades.length) * 100).toFixed(1) : '0.0',
-        expectancy: trades.length > 0 ? realizedPnL / trades.length : 0,
-        slippageBps: avgSlippageBps,
+        realizedPnL: metrics.realizedPnL,
+        totalFees: metrics.totalFees,
+        winRate: metrics.winRate.toFixed(1),
+        expectancy: metrics.expectancy,
+        slippageBps: metrics.avgSlippageBps,
         maxDrawdown: maxDrawdownPercent.toFixed(1),
       };
 
-      const res = await fetch('/api/case-study/generate', {
+      const data = await apiRequest<{ report: CaseStudyReport }>('/api/case-study/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionStats, trades, finalStatus }),
-      });
-      if (!res.ok) throw new Error(`Case study request failed (${res.status})`);
-      const data = await res.json();
+      }, 20000);
       if (data && data.report) {
         setCaseStudyReport(data.report);
       }
       setIsCaseStudyOpen(true);
     } catch (err) {
       console.error('Error generating case study:', err);
+      setReportError(err instanceof Error ? err.message : 'Case study unavailable');
+      setIsCaseStudyOpen(true);
     } finally {
       setIsGeneratingReport(false);
     }
@@ -369,13 +404,11 @@ export default function App() {
     setIsAnalyzingToken(true);
     addLog('NARRATIVE_PROOF', `Requesting Gemini AI conviction analysis for $${token.symbol}...`, 'info');
     try {
-      const res = await fetch('/api/gemini/analyze-narrative', {
+      const data = await apiRequest<{ narrativeScore: number; aiThesis?: string; viralVelocity?: TokenOpportunity['viralVelocity']; expectedUpside?: string; recommendedAction?: TokenOpportunity['recommendedAction']; source?: string }>('/api/gemini/analyze-narrative', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token }),
-      });
-      if (!res.ok) throw new Error(`Narrative analysis failed (${res.status})`);
-      const data = await res.json();
+      }, 20000);
       if (data && Number.isFinite(data.narrativeScore)) {
         setTokens((prev) =>
           prev.map((t) =>
@@ -384,6 +417,7 @@ export default function App() {
                   ...t,
                   narrativeScore: data.narrativeScore,
                   aiThesis: data.aiThesis,
+                  analysisSource: data.source === 'LIVE' ? 'LIVE' : 'MOCK',
                   viralVelocity: data.viralVelocity,
                   expectedUpside: data.expectedUpside,
                   recommendedAction: data.recommendedAction,
@@ -393,13 +427,13 @@ export default function App() {
         );
         addLog(
           'SCORE',
-          `AI Thesis ready for $${token.symbol}: Score ${data.narrativeScore}/100. "${String(data.aiThesis || 'No thesis returned').slice(0, 75)}..."`,
+          `${data.source === 'LIVE' ? 'Gemini analysis' : 'Heuristic analysis'} ready for ${token.symbol}: Score ${data.narrativeScore}/100. "${String(data.aiThesis || 'No thesis returned').slice(0, 75)}..."`,
           'success'
         );
       }
     } catch (err) {
       console.error('AI Analysis failed:', err);
-      addLog('NARRATIVE_PROOF', `AI analysis unavailable for $${token.symbol}; no order was placed.`, 'warning');
+      addLog('NARRATIVE_PROOF', `AI analysis unavailable for ${token.symbol}: ${err instanceof Error ? err.message : 'Unknown error'}. No order was placed.`, 'warning');
     } finally {
       setIsAnalyzingToken(false);
     }
@@ -411,6 +445,10 @@ export default function App() {
       addLog('RISK_CHECK', 'Mainnet wallet execution is disabled. Use the paper-trading sandbox.', 'alert');
       return;
     }
+    if (!isFreshLiveMarket(marketStatus, lastScanAt)) {
+      addLog('RISK_CHECK', 'Entry blocked: a verified live market feed is required, even in paper trading.', 'alert');
+      return;
+    }
     if (killSwitchActive || stoppedAtLoss || targetAchieved) {
       addLog('RISK_CHECK', 'Entry blocked by session safety lock.', 'alert');
       return;
@@ -419,25 +457,28 @@ export default function App() {
       addLog('RISK_CHECK', `Cannot execute buy: Active position $${activePosition.tokenSymbol} already open. Max 1 active position per risk limits.`, 'warning');
       return;
     }
-    if (realizedPnL <= -riskSettings.maxDailyLossUsd) {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayRealized = ledgerMetrics(trades.filter(trade => trade.timestamp >= todayStart.getTime())).realizedPnL;
+    if (remainingDailyLossBudget(riskSettings.maxDailyLossUsd, todayRealized) <= 0) {
       addLog('RISK_CHECK', `Daily loss limit of $${riskSettings.maxDailyLossUsd.toFixed(2)} reached. New entries blocked.`, 'alert');
       return;
     }
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-    const dailySpend = trades
-      .filter((trade) => trade.type === 'BUY' && trade.timestamp >= startOfDay.getTime())
-      .reduce((sum, trade) => sum + trade.totalUsd, 0);
-    if (dailySpend >= agentConfig.maxDailySpendUsd) {
+    const dailySpend = dailySpendUsd(trades);
+    if (dailySpend + Math.min(riskSettings.maxPositionSizeUsd, agentConfig.positionSizeUsd, wallet.cashUsd) > agentConfig.maxDailySpendUsd) {
       addLog('RISK_CHECK', `Daily spend limit of $${agentConfig.maxDailySpendUsd.toFixed(2)} reached.`, 'alert');
       return;
     }
     const score = token.narrativeScore ?? token.xVelocity;
-    if (score < riskSettings.minNarrativeScore || token.rugScore < 85 || token.liquidity < riskSettings.minLiquidityUsd) {
+    if (!Number.isFinite(score) || score < riskSettings.minNarrativeScore || token.rugScore < 85 || token.liquidity < riskSettings.minLiquidityUsd) {
       addLog('RISK_CHECK', `Entry blocked for $${token.symbol}: score, rug safety, or liquidity threshold failed.`, 'warning');
       return;
     }
-    const tradeSizeUsd = Math.min(riskSettings.maxPositionSizeUsd, wallet.cashUsd);
+    const tradeSizeUsd = Math.min(riskSettings.maxPositionSizeUsd, agentConfig.positionSizeUsd, wallet.cashUsd);
+    if (!Number.isFinite(token.priceUsd) || token.priceUsd <= 0 || !Number.isFinite(token.liquidity)) {
+      addLog('RISK_CHECK', 'Entry blocked: market quote or liquidity invalid.', 'alert');
+      return;
+    }
     if (wallet.positionsValue + tradeSizeUsd > agentConfig.maxOpenExposureUsd) {
       addLog('RISK_CHECK', `Open exposure limit of $${agentConfig.maxOpenExposureUsd.toFixed(2)} would be exceeded.`, 'alert');
       return;
@@ -447,10 +488,8 @@ export default function App() {
       return;
     }
 
-    const feeUsd = 0.0025; // 0.000014 SOL priority fee
-    const slippageBps = Math.floor(Math.random() * 25) + 35; // 35 - 60 bps
-    const effectiveUsd = tradeSizeUsd - feeUsd;
-    const tokensAmount = effectiveUsd / token.priceUsd;
+    const { feeUsd, slippageBps, tokenAmount: tokensAmount, fillPriceUsd } = estimatePaperBuy(tradeSizeUsd, token.priceUsd);
+    const effectiveUsd = tokensAmount * token.priceUsd;
     if (!Number.isFinite(tokensAmount) || tokensAmount <= 0) {
       addLog('RISK_CHECK', `Entry blocked for $${token.symbol}: invalid quote or token price.`, 'alert');
       return;
@@ -465,13 +504,13 @@ export default function App() {
       tokenName: token.name,
       tokenAddress: token.address,
       tokenIcon: token.icon,
-      entryPrice: token.priceUsd,
+      entryPrice: fillPriceUsd,
       currentPrice: token.priceUsd,
       tokenAmount: tokensAmount,
       investedUsd: tradeSizeUsd,
       currentValueUsd: effectiveUsd,
-      unrealizedPnL: -feeUsd,
-      unrealizedPnLPercent: (-feeUsd / tradeSizeUsd) * 100,
+      unrealizedPnL: effectiveUsd - tradeSizeUsd,
+      unrealizedPnLPercent: ((effectiveUsd - tradeSizeUsd) / tradeSizeUsd) * 100,
       entryTime: Date.now(),
       exitCondition: `TP +${riskSettings.takeProfitPercent}% / SL ${riskSettings.stopLossPercent}%`,
       stopLossPrice: slPrice,
@@ -500,7 +539,7 @@ export default function App() {
       type: 'BUY',
       tokenSymbol: token.symbol,
       tokenName: token.name,
-      priceUsd: token.priceUsd,
+      priceUsd: fillPriceUsd,
       tokenAmount: tokensAmount,
       totalUsd: tradeSizeUsd,
       feeUsd,
@@ -513,17 +552,18 @@ export default function App() {
 
     addLog(
       'EXECUTE',
-      `BUY SWAP CONFIRMED: $${tradeSizeUsd.toFixed(2)} -> ${tokensAmount.toLocaleString()} $${token.symbol} @ $${token.priceUsd.toFixed(4)}. Slippage: ${slippageBps} bps. Tx: ${txSig}`,
+      `PAPER BUY SIMULATED: ${tradeSizeUsd.toFixed(2)} -> ${tokensAmount.toLocaleString()} ${token.symbol} @ ${fillPriceUsd.toFixed(6)} estimated fill. Slippage assumption: ${slippageBps} bps. Paper ID: ${txSig}`,
       'trade'
     );
   };
+
+  executeBuyTradeRef.current = executeBuyTrade;
 
   // Close Position (Sell)
   const closePosition = useCallback((reason: string) => {
     if (!activePosition) return;
 
-    const sellFeeUsd = 0.0025;
-    const proceedsUsd = Math.max(0, activePosition.currentValueUsd - sellFeeUsd);
+    const { feeUsd: sellFeeUsd, proceedsUsd, fillPriceUsd: sellFillPriceUsd, slippageBps: sellSlippageBps } = estimatePaperSell(activePosition.tokenAmount, activePosition.currentPrice);
     const netTradePnL = proceedsUsd - activePosition.investedUsd;
     const pnlPercent = (netTradePnL / activePosition.investedUsd) * 100;
     const isWin = netTradePnL > 0;
@@ -533,11 +573,11 @@ export default function App() {
       type: 'SELL',
       tokenSymbol: activePosition.tokenSymbol,
       tokenName: activePosition.tokenName,
-      priceUsd: activePosition.currentPrice,
+      priceUsd: sellFillPriceUsd,
       tokenAmount: activePosition.tokenAmount,
       totalUsd: proceedsUsd,
       feeUsd: sellFeeUsd,
-      slippageBps: 42,
+      slippageBps: sellSlippageBps,
       realizedPnL: netTradePnL,
       pnlPercent,
       timestamp: Date.now(),
@@ -565,7 +605,7 @@ export default function App() {
 
     addLog(
       'EXIT',
-      `SELL SWAP EXECUTED: Closed $${activePosition.tokenSymbol}. Net P&L: ${netTradePnL >= 0 ? '+' : ''}$${netTradePnL.toFixed(2)} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(1)}%). Reason: ${reason}`,
+      `PAPER SELL SIMULATED: Closed $${activePosition.tokenSymbol}. Net P&L: ${netTradePnL >= 0 ? '+' : ''}$${netTradePnL.toFixed(2)} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(1)}%). Reason: ${reason}`,
       isWin ? 'success' : 'alert'
     );
 
@@ -726,7 +766,8 @@ export default function App() {
     addLog('CONNECT', 'Reset $5 Case Study: Fresh $5.00 capital loaded. Target: $10.00.', 'trade');
   };
 
-  const expectancy = trades.length > 0 ? realizedPnL / trades.length : 0;
+  const ledger = ledgerMetrics(trades);
+  const expectancy = ledger.expectancy;
 
   return (
     <div className="min-h-screen bg-[#070a12] text-slate-100 font-sans selection:bg-cyan-500 selection:text-black">
@@ -748,73 +789,13 @@ export default function App() {
       />
 
       {/* Main Single-Screen Command Center */}
-      <main className="max-w-7xl mx-auto p-4 space-y-4">
-        <AgentCommandPanel config={agentConfig} signal={latestSignal} onCommand={applyAgentCommand} />
-        {/* 1. The 14-Step AGENT LOOP Pipeline */}
-        <AgentLoopPipeline
-          currentStep={currentStep}
-          isAgentActive={isAgentActive}
-          onStepClick={(step) => {
-            addLog(step, `Inspecting phase [${step}]. Safety invariants active.`, 'info');
-          }}
-        />
-
-        {/* 2. THE $5 CASE STUDY HERO MODULE */}
-        <CaseStudyHero
-          wallet={wallet}
-          activePosition={activePosition}
-          totalTrades={trades.length}
-          winningTrades={winningTradesCount}
-          realizedPnL={realizedPnL}
-          totalFeesUsd={totalFeesUsd}
-          avgSlippageBps={avgSlippageBps}
-          maxDrawdownPercent={maxDrawdownPercent}
-          expectancyUsd={expectancy}
-          targetAchieved={targetAchieved}
-          stoppedAtLoss={stoppedAtLoss}
-          onOpenCaseStudyModal={handleGenerateCaseStudy}
-        />
-
-        {/* 3. Command Center 3-Column Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
-          {/* Left Column: Wallet & 420 Module (4 cols) */}
-          <div className="lg:col-span-4 space-y-4">
-            <WalletCard
-              wallet={wallet}
-              activePosition={activePosition}
-              onRefreshBalance={() => {
-                addLog('OBSERVE', 'Refreshing Solana RPC balance...', 'info');
-              }}
-              onConnectWallet={() => setIsWalletModalOpen(true)}
-            />
-
-            <Meme420Module
-              onTriggerBurn={() => {
-                addLog('EXECUTE', '🔥 Community 420 burn recorded on-chain to Solana incinerator.', 'trade');
-              }}
-            />
-
-            <ActivePositionCard
-              position={activePosition}
-              onEmergencyExit={() => closePosition('Manual emergency market exit by operator')}
-              isAgentActive={isAgentActive}
-            />
-          </div>
-
-          {/* Center Column: FOMO Signals & X Narrative Radar (4 cols) */}
-          <div className="lg:col-span-4 space-y-4">
-            <FomoAndXRadar
-              tokens={tokens}
-              selectedToken={selectedToken}
-              onSelectToken={(t) => {
-                setSelectedToken(t);
-                addLog('OBSERVE', `Focused on $${t.symbol}: 5m volume $${t.volume24h.toLocaleString()}, X Velocity ${t.xVelocity}/100.`, 'info');
-              }}
-            />
-          </div>
-
-          {/* Right Column: Live Opportunities & AI Thesis (4 cols) */}
-          <div className="lg:col-span-4 space-y-4">
+      <main className="max-w-[1600px] mx-auto p-4 sm:p-6 space-y-5 dashboard-glow">
+        <div id="overview" className="scroll-mt-40"><OverviewStrip wallet={wallet} position={activePosition} trades={trades} realizedPnL={ledger.realizedPnL} risk={riskSettings} marketStatus={marketStatus} lastScanAt={lastScanAt} isAgentActive={isAgentActive} killSwitchActive={killSwitchActive} /></div>
+        {reportError && <div role="alert" className="rounded-xl border border-amber-700 bg-amber-950/40 p-3 text-xs text-amber-200">Report unavailable: {reportError}</div>}
+        {marketError && <div role="alert" className="rounded-xl border border-rose-700/60 bg-rose-950/40 p-3 text-xs text-rose-200 flex flex-wrap justify-between items-center gap-2"><span>Market data error: {marketError}</span><button className="rounded-lg border border-rose-500/50 px-3 py-1.5 hover:bg-rose-900" onClick={fetchMarketTokens}>Retry</button></div>}
+        {/* Primary workflow: identify an opportunity, inspect signals and monitor exposure. */}
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
+          <div className="xl:col-span-7 min-w-0 scroll-mt-40" id="opportunities">
             <OpportunitiesTable
               tokens={tokens}
               selectedToken={selectedToken}
@@ -822,16 +803,76 @@ export default function App() {
               onExecuteTrade={executeBuyTrade}
               onAnalyzeWithAI={handleAnalyzeTokenWithAI}
               isAnalyzing={isAnalyzingToken}
-              canExecute={wallet.connected && wallet.isSimulated && !activePosition && !killSwitchActive && wallet.cashUsd >= 0.5}
+              isLoading={marketLoading}
+              maxPositionSizeUsd={riskSettings.maxPositionSizeUsd}
+              canExecute={wallet.connected && wallet.isSimulated && isFreshLiveMarket(marketStatus, lastScanAt) && !activePosition && !killSwitchActive && wallet.cashUsd >= 0.5}
+            />
+          </div>
+          <div className="xl:col-span-5 min-w-0 space-y-4">
+            <FomoAndXRadar
+              tokens={tokens}
+              selectedToken={selectedToken}
+              signal={latestSignal}
+              marketStatus={marketStatus}
+              xStatus={sources.xRadar.status}
+              xSignals={xSignals}
+              lastScanAt={lastScanAt}
+              onSelectToken={(token) => {
+                setSelectedToken(token);
+                addLog('OBSERVE', `Focused on $${token.symbol}: 24h volume $${token.volume24h.toLocaleString()}; price-derived velocity proxy ${token.xVelocity}/100.`, 'info');
+              }}
+            />
+            <ActivePositionCard
+              position={activePosition}
+              onEmergencyExit={() => closePosition('Manual emergency paper exit by operator')}
+              isAgentActive={isAgentActive}
             />
           </div>
         </div>
 
+        <TokenInspector token={selectedToken} source={marketStatus} onAnalyze={handleAnalyzeTokenWithAI} isAnalyzing={isAnalyzingToken} />
+        <div id="agent" className="scroll-mt-40"><AgentCommandPanel config={agentConfig} signal={latestSignal} onCommand={applyAgentCommand} /></div>
+        <AgentLoopPipeline
+          currentStep={currentStep}
+          isAgentActive={isAgentActive}
+          onStepClick={step => addLog(step, `Inspecting phase [${step}]. See terminal for observed events; pipeline is a clock visualization.`, 'info')}
+        />
+
+        <div id="portfolio" className="space-y-4 scroll-mt-40">
+          <CaseStudyHero
+            wallet={wallet}
+            activePosition={activePosition}
+            totalTrades={ledger.closedCount}
+            winningTrades={ledger.wins}
+            realizedPnL={ledger.realizedPnL}
+            totalFeesUsd={ledger.totalFees}
+            avgSlippageBps={ledger.avgSlippageBps}
+            maxDrawdownPercent={maxDrawdownPercent}
+            expectancyUsd={expectancy}
+            targetAchieved={targetAchieved}
+            stoppedAtLoss={stoppedAtLoss}
+            onOpenCaseStudyModal={handleGenerateCaseStudy}
+          />
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            <div className="lg:col-span-7">
+              <WalletCard
+                wallet={wallet}
+                activePosition={activePosition}
+                onRefreshBalance={() => addLog('OBSERVE', 'Wallet balance refresh is unavailable: RPC balance fetching has not been implemented.', 'warning')}
+                onConnectWallet={() => setIsWalletModalOpen(true)}
+              />
+            </div>
+            <div className="lg:col-span-5">
+              <Meme420Module onTriggerBurn={() => addLog('OBSERVE', '420 community demo interaction; no tokens burned on-chain.', 'info')} />
+            </div>
+          </div>
+        </div>
+
         {/* 4. Telemetry Stream & Reasoning Terminal */}
-        <TerminalLogs
+        <div id="activity" className="scroll-mt-40"><TerminalLogs
           logs={logs}
           onClearLogs={() => setLogs([])}
-        />
+        /></div>
       </main>
 
       {/* Modals */}
@@ -848,14 +889,7 @@ export default function App() {
         isOpen={isDataSourcesOpen}
         onClose={() => setIsDataSourcesOpen(false)}
         sources={sources}
-        onUpdateSourceStatus={(key, status) => {
-          setSources((prev) => ({
-            ...prev,
-            [key]: { ...prev[key], status },
-          }));
-          addLog('OBSERVE', `Integration [${key}] status updated to: ${status}`, status === 'DISCONNECTED' ? 'alert' : 'info');
-        }}
-        onRefreshSources={fetchMarketTokens}
+        onRefreshSources={() => { fetchMarketTokens(); refreshSourceStatuses(); }}
       />
 
       <RiskSettingsModal

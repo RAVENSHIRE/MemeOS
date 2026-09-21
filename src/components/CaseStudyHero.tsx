@@ -73,7 +73,7 @@ export const CaseStudyHero: React.FC<Props> = ({
             <div>
               <div className="font-extrabold text-sm text-white">TARGET ACHIEVED: $10.00 NET EQUITY REACHED!</div>
               <div className="text-xs text-emerald-300">
-                The agent has stopped, locked results, and generated the reproducible Case Study.
+                The paper-trading agent stopped at the configured target. Review the simulated ledger.
               </div>
             </div>
           </div>
@@ -114,7 +114,7 @@ export const CaseStudyHero: React.FC<Props> = ({
               $5 CASE STUDY OBJECTIVE
             </span>
             <span className="text-xs font-mono text-slate-400">
-              Deterministic 2.0x Capital Multiplication
+              Simulated equity target · outcome not guaranteed
             </span>
           </div>
           <div className="flex items-baseline gap-3 mt-1.5">
@@ -214,7 +214,7 @@ export const CaseStudyHero: React.FC<Props> = ({
 
         {/* Metric 3: Fees Incurred */}
         <div className="bg-slate-900/80 border border-slate-800/80 rounded-xl p-2.5">
-          <span className="text-[10px] font-mono text-slate-400 block uppercase">Solana Fees</span>
+          <span className="text-[10px] font-mono text-slate-400 block uppercase">Simulated Fees</span>
           <span className="text-sm font-black font-mono block mt-0.5 text-slate-300">
             ${totalFeesUsd.toFixed(4)}
           </span>
@@ -230,7 +230,7 @@ export const CaseStudyHero: React.FC<Props> = ({
 
         {/* Metric 5: Number of Trades */}
         <div className="bg-slate-900/80 border border-slate-800/80 rounded-xl p-2.5">
-          <span className="text-[10px] font-mono text-slate-400 block uppercase">Trades Count</span>
+          <span className="text-[10px] font-mono text-slate-400 block uppercase">Closed Trades</span>
           <span className="text-sm font-black font-mono block mt-0.5 text-white">
             {totalTrades} <span className="text-[10px] text-slate-400 font-normal">({winningTrades}W / {totalTrades - winningTrades}L)</span>
           </span>
