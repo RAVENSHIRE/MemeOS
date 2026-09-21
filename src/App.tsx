@@ -855,6 +855,7 @@ export default function App() {
               onExecuteTrade={executeBuyTrade}
               onAnalyzeWithAI={handleAnalyzeTokenWithAI}
               isAnalyzing={isAnalyzingToken}
+              maxPositionSizeUsd={riskSettings.maxPositionSizeUsd}
               canExecute={wallet.connected && wallet.isSimulated && marketStatus === 'LIVE' && !activePosition && !killSwitchActive && wallet.cashUsd >= 0.5}
             />
           </div>
