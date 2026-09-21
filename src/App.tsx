@@ -786,12 +786,12 @@ export default function App() {
 
       {/* Main Single-Screen Command Center */}
       <main className="max-w-[1600px] mx-auto p-4 sm:p-6 space-y-5 dashboard-glow">
-        <OverviewStrip wallet={wallet} position={activePosition} trades={trades} realizedPnL={ledger.realizedPnL} risk={riskSettings} marketStatus={marketStatus} lastScanAt={lastScanAt} isAgentActive={isAgentActive} killSwitchActive={killSwitchActive} />
+        <div id="overview" className="scroll-mt-40"><OverviewStrip wallet={wallet} position={activePosition} trades={trades} realizedPnL={ledger.realizedPnL} risk={riskSettings} marketStatus={marketStatus} lastScanAt={lastScanAt} isAgentActive={isAgentActive} killSwitchActive={killSwitchActive} /></div>
         {reportError && <div role="alert" className="rounded-xl border border-amber-700 bg-amber-950/40 p-3 text-xs text-amber-200">Report unavailable: {reportError}</div>}
         {marketError && <div role="alert" className="rounded-xl border border-rose-700/60 bg-rose-950/40 p-3 text-xs text-rose-200 flex flex-wrap justify-between items-center gap-2"><span>Market data error: {marketError}</span><button className="rounded-lg border border-rose-500/50 px-3 py-1.5 hover:bg-rose-900" onClick={fetchMarketTokens}>Retry</button></div>}
         {/* Primary workflow: identify an opportunity, inspect signals and monitor exposure. */}
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
-          <div className="xl:col-span-7 min-w-0" id="opportunities">
+          <div className="xl:col-span-7 min-w-0 scroll-mt-40" id="opportunities">
             <OpportunitiesTable
               tokens={tokens}
               selectedToken={selectedToken}
@@ -825,14 +825,14 @@ export default function App() {
           </div>
         </div>
 
-        <div id="agent"><AgentCommandPanel config={agentConfig} signal={latestSignal} onCommand={applyAgentCommand} /></div>
+        <div id="agent" className="scroll-mt-40"><AgentCommandPanel config={agentConfig} signal={latestSignal} onCommand={applyAgentCommand} /></div>
         <AgentLoopPipeline
           currentStep={currentStep}
           isAgentActive={isAgentActive}
           onStepClick={step => addLog(step, `Inspecting phase [${step}]. See terminal for observed events; pipeline is a clock visualization.`, 'info')}
         />
 
-        <div id="portfolio" className="space-y-4">
+        <div id="portfolio" className="space-y-4 scroll-mt-40">
           <CaseStudyHero
             wallet={wallet}
             activePosition={activePosition}
@@ -863,10 +863,10 @@ export default function App() {
         </div>
 
         {/* 4. Telemetry Stream & Reasoning Terminal */}
-        <TerminalLogs
+        <div id="activity" className="scroll-mt-40"><TerminalLogs
           logs={logs}
           onClearLogs={() => setLogs([])}
-        />
+        /></div>
       </main>
 
       {/* Modals */}
