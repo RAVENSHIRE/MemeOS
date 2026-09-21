@@ -1,0 +1,88 @@
+api_keys:
+  birdeye: ${BIRDEYE_API_KEY}
+  x_bearer: ${X_BEARER_TOKEN}
+  blockscout: ${BLOCKSCOUT_API_KEY}
+
+fomo:
+  websocket_url: ${FOMO_WS_URL}
+  jwt: ${FOMO_JWT}
+  listen_seconds: 8
+
+telegram:
+  api_id: ${TELEGRAM_API_ID}
+  api_hash: ${TELEGRAM_API_HASH}
+  session: ${TELEGRAM_SESSION}
+
+chains:
+  solana:
+    rpc_url: ${SOLANA_RPC_URL}
+    chain_id: solana
+  robinhood:
+    chain_id: 4663
+    blockscout_url: https://robinhoodchain.blockscout.com
+
+filters:
+  name_regex: (?i)inu
+  max_market_cap_usd: 300000
+  min_liquidity_usd: 5000
+  max_top10_holder_pct: 45
+  min_onchain_security: 50
+
+scanner:
+  poll_seconds: 10
+  max_enriched_per_cycle: 6
+
+scoring:
+  score_threshold: 72
+  weights:
+    volatility: 0.13
+    community: 0.14
+    x: 0.16
+    website: 0.10
+    big_players: 0.16
+    ath_drawdown: 0.15
+    launchpad: 0.16
+  launchpads:
+    pump-fun: 78
+    letsbonk: 72
+    moonshot: 70
+    boop: 66
+    believe: 64
+    pons: 76
+    raydium: 82
+    meteora: 80
+    unknown: 35
+
+risk:
+  portfolio_equity_usd: 100
+  max_portfolio_risk_pct: 0.02
+  max_position_usd: 25
+  min_position_usd: 0.5
+  max_liquidity_fraction: 0.02
+  max_open_exposure_usd: 50
+  max_open_positions: 3
+  max_daily_spend_usd: 100
+  cooldown_seconds: 300
+
+execution:
+  dry_run: true
+  solana:
+    provider: trojan
+    bot_username: ${TROJAN_BOT_USERNAME}
+    native_round_decimals: 3
+    button_timeout_s: 20
+    buy_button_regex: (?i)^buy.*$
+    amount_button_regex: (?i).*{native_amount}.*
+  robinhood:
+    provider: basedbot
+    bot_username: ${BASED_BOT_USERNAME}
+    command_template: /buy {address} {size_usd}
+
+runtime:
+  state_file: data/bot_state.json
+
+onchain:
+  history_file: data/onchain_history.json
+
+http:
+  timeout_s: 6
