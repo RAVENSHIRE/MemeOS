@@ -20,6 +20,7 @@ import {
 
 import { HeaderBar } from './components/HeaderBar';
 import { OverviewStrip } from './components/OverviewStrip';
+import { TokenInspector } from './components/TokenInspector';
 import { apiRequest, isFreshLiveMarket, uniqueTokens, type MarketSnapshot, type XAdapterEvent } from './lib/api';
 import { dailySpendUsd, estimatePaperBuy, estimatePaperSell, ledgerMetrics, remainingDailyLossBudget } from './lib/trading';
 import { AgentLoopPipeline } from './components/AgentLoopPipeline';
@@ -829,6 +830,7 @@ export default function App() {
           </div>
         </div>
 
+        <TokenInspector token={selectedToken} source={marketStatus} onAnalyze={handleAnalyzeTokenWithAI} isAnalyzing={isAnalyzingToken} />
         <div id="agent" className="scroll-mt-40"><AgentCommandPanel config={agentConfig} signal={latestSignal} onCommand={applyAgentCommand} /></div>
         <AgentLoopPipeline
           currentStep={currentStep}
