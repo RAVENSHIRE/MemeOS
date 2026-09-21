@@ -645,25 +645,25 @@ app.post('/api/case-study/generate', async (req, res) => {
   const fallbackReport = {
     title: `MEME OS $5 Case Study Audit: ${finalStatus === 'TARGET_REACHED' ? 'TARGET ACHIEVED ($10 NET EQUITY)' : 'CAPITAL PRESERVED'}`,
     timestamp: new Date().toISOString(),
-    executiveSummary: `The autonomous agent initiated execution with $5.00 live seed capital on Solana. Operating strictly within deterministic risk parameters (max $1.80 per position, -15% stop-loss, trailing take-profit, verified liquidity), the agent executed ${trades?.length || 0} trades. Final Net Equity stands at $${sessionStats?.equity?.toFixed(2) || '10.00'}, achieving a net return of +${(((sessionStats?.equity || 10) - 5) / 5 * 100).toFixed(1)}%.`,
+    executiveSummary: `The paper-trading agent started with $5.00 simulated capital. Orders and fees in this report are simulated rather than on-chain transactions. The session recorded ${trades?.length || 0} trade records. Final simulated equity: ${Number(sessionStats?.equity ?? 5).toFixed(2)}.`,
     metricsTable: {
       initialCapital: '$5.00',
-      finalEquity: `$${sessionStats?.equity?.toFixed(2) || '10.00'}`,
-      netProfitLoss: `$${((sessionStats?.equity || 10) - 5).toFixed(2)} (+${(((sessionStats?.equity || 10) - 5) / 5 * 100).toFixed(1)}%)`,
+      finalEquity: `${Number(sessionStats?.equity ?? 5).toFixed(2)}`,
+      netProfitLoss: `${(Number(sessionStats?.equity ?? 5) - 5).toFixed(2)} (${((Number(sessionStats?.equity ?? 5) - 5) / 5 * 100).toFixed(1)}%)`,
       totalTrades: trades?.length || 0,
-      winRate: `${sessionStats?.winRate || '75.0'}%`,
-      expectancy: `$${sessionStats?.expectancy?.toFixed(3) || '0.835'} / trade`,
-      totalFees: `$${sessionStats?.totalFees?.toFixed(4) || '0.0125'}`,
-      avgSlippage: `${sessionStats?.slippageBps || '48'} bps`,
-      maxDrawdown: `${sessionStats?.maxDrawdown || '6.4'}%`,
+      winRate: `${sessionStats?.winRate ?? 'N/A'}%`,
+      expectancy: `${Number(sessionStats?.expectancy ?? 0).toFixed(3)} / trade`,
+      totalFees: `${Number(sessionStats?.totalFees ?? 0).toFixed(4)}`,
+      avgSlippage: `${sessionStats?.slippageBps ?? 'N/A'} bps`,
+      maxDrawdown: `${sessionStats?.maxDrawdown ?? 'N/A'}%`,
     },
     keyTakeaways: [
-      'Narrative Velocity Filter: Pre-screening tokens with X velocity > 80 and liquidity > $100k reduced rug probability to 0%.',
-      'Micro-Position Sizing: Limiting initial allocation to $1.50 prevented catastrophic single-trade capital degradation.',
-      'Slippage & Priority Fee Minimization: Executed via simulated fast-path Jupiter routing, capping friction under 0.6% total equity impact.',
-      'Deterministic Stop vs Narrative Collapse: Dynamic trailing exits locked in +30% to +60% runs before secondary dump waves.',
+      'Risk scores and inferred social velocity are heuristics, not verified on-chain security or X measurements.',
+      'Position limits constrain simulated exposure; they do not eliminate market risk.',
+      'Fees and slippage in the ledger are simulated assumptions, not venue-confirmed fills.',
+      'Stop-loss and trailing exits depend on quote freshness and execution assumptions.',
     ],
-    verifiedReproducibility: 'High. The pipeline code and risk criteria can be re-run on Solana mainnet or devnet with identical execution logic.',
+    verifiedReproducibility: 'Not independently verified. Paper-trading results do not establish mainnet execution reproducibility.',
   };
 
   if (!ai) {
@@ -675,7 +675,7 @@ app.post('/api/case-study/generate', async (req, res) => {
 
   try {
     const prompt = `You are the quantitative auditor for MEME OS, an autonomous Solana memecoin trading system.
-A $5 Case Study run has concluded with status: ${finalStatus}.
+A $5 simulated paper-trading case study run has concluded with status: ${finalStatus}. Never call this live trading or claim independently verified safety.
 Session Metrics:
 Initial Capital: $5.00
 Final Equity: $${sessionStats?.equity?.toFixed(2)}
