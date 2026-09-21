@@ -21,7 +21,7 @@ import {
 import { HeaderBar } from './components/HeaderBar';
 import { OverviewStrip } from './components/OverviewStrip';
 import { apiRequest, isFreshLiveMarket, uniqueTokens, type MarketSnapshot } from './lib/api';
-import { dailySpendUsd, ledgerMetrics, remainingDailyLossBudget } from './lib/trading';
+import { dailySpendUsd, estimatePaperBuy, estimatePaperSell, ledgerMetrics, remainingDailyLossBudget } from './lib/trading';
 import { AgentLoopPipeline } from './components/AgentLoopPipeline';
 import { CaseStudyHero } from './components/CaseStudyHero';
 import { WalletCard } from './components/WalletCard';
@@ -477,10 +477,8 @@ export default function App() {
       return;
     }
 
-    const feeUsd = 0.0025; // 0.000014 SOL priority fee
-    const slippageBps = Math.floor(Math.random() * 25) + 35; // 35 - 60 bps
-    const effectiveUsd = tradeSizeUsd - feeUsd;
-    const tokensAmount = effectiveUsd / token.priceUsd;
+    const { feeUsd, slippageBps, tokenAmount: tokensAmount, fillPriceUsd } = estimatePaperBuy(tradeSizeUsd, token.priceUsd);
+    const effectiveUsd = tokensAmount * token.priceUsd;
     if (!Number.isFinite(tokensAmount) || tokensAmount <= 0) {
       addLog('RISK_CHECK', `Entry blocked for $${token.symbol}: invalid quote or token price.`, 'alert');
       return;
@@ -495,13 +493,13 @@ export default function App() {
       tokenName: token.name,
       tokenAddress: token.address,
       tokenIcon: token.icon,
-      entryPrice: token.priceUsd,
+      entryPrice: fillPriceUsd,
       currentPrice: token.priceUsd,
       tokenAmount: tokensAmount,
       investedUsd: tradeSizeUsd,
       currentValueUsd: effectiveUsd,
-      unrealizedPnL: -feeUsd,
-      unrealizedPnLPercent: (-feeUsd / tradeSizeUsd) * 100,
+      unrealizedPnL: effectiveUsd - tradeSizeUsd,
+      unrealizedPnLPercent: ((effectiveUsd - tradeSizeUsd) / tradeSizeUsd) * 100,
       entryTime: Date.now(),
       exitCondition: `TP +${riskSettings.takeProfitPercent}% / SL ${riskSettings.stopLossPercent}%`,
       stopLossPrice: slPrice,
@@ -530,7 +528,7 @@ export default function App() {
       type: 'BUY',
       tokenSymbol: token.symbol,
       tokenName: token.name,
-      priceUsd: token.priceUsd,
+      priceUsd: fillPriceUsd,
       tokenAmount: tokensAmount,
       totalUsd: tradeSizeUsd,
       feeUsd,
@@ -543,7 +541,7 @@ export default function App() {
 
     addLog(
       'EXECUTE',
-      `PAPER BUY SIMULATED: $${tradeSizeUsd.toFixed(2)} -> ${tokensAmount.toLocaleString()} $${token.symbol} @ $${token.priceUsd.toFixed(4)}. Slippage: ${slippageBps} bps. Tx: ${txSig}`,
+      `PAPER BUY SIMULATED: ${tradeSizeUsd.toFixed(2)} -> ${tokensAmount.toLocaleString()} ${token.symbol} @ ${fillPriceUsd.toFixed(6)} estimated fill. Slippage assumption: ${slippageBps} bps. Paper ID: ${txSig}`,
       'trade'
     );
   };
@@ -554,8 +552,7 @@ export default function App() {
   const closePosition = useCallback((reason: string) => {
     if (!activePosition) return;
 
-    const sellFeeUsd = 0.0025;
-    const proceedsUsd = Math.max(0, activePosition.currentValueUsd - sellFeeUsd);
+    const { feeUsd: sellFeeUsd, proceedsUsd, fillPriceUsd: sellFillPriceUsd, slippageBps: sellSlippageBps } = estimatePaperSell(activePosition.tokenAmount, activePosition.currentPrice);
     const netTradePnL = proceedsUsd - activePosition.investedUsd;
     const pnlPercent = (netTradePnL / activePosition.investedUsd) * 100;
     const isWin = netTradePnL > 0;
@@ -565,11 +562,11 @@ export default function App() {
       type: 'SELL',
       tokenSymbol: activePosition.tokenSymbol,
       tokenName: activePosition.tokenName,
-      priceUsd: activePosition.currentPrice,
+      priceUsd: sellFillPriceUsd,
       tokenAmount: activePosition.tokenAmount,
       totalUsd: proceedsUsd,
       feeUsd: sellFeeUsd,
-      slippageBps: 42,
+      slippageBps: sellSlippageBps,
       realizedPnL: netTradePnL,
       pnlPercent,
       timestamp: Date.now(),
