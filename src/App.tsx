@@ -84,8 +84,8 @@ export default function App() {
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [realizedPnL, setRealizedPnL] = useState(0);
   const [totalFeesUsd, setTotalFeesUsd] = useState(0);
-  const [avgSlippageBps, setAvgSlippageBps] = useState(48);
-  const [maxDrawdownPercent, setMaxDrawdownPercent] = useState(4.2);
+  const [avgSlippageBps, setAvgSlippageBps] = useState(0);
+  const [maxDrawdownPercent, setMaxDrawdownPercent] = useState(0);
   const [peakEquity, setPeakEquity] = useState(5.0);
   const [winningTradesCount, setWinningTradesCount] = useState(0);
   const [caseStudyReport, setCaseStudyReport] = useState<CaseStudyReport | null>(null);
@@ -416,7 +416,7 @@ export default function App() {
         );
         addLog(
           'SCORE',
-          `AI Thesis ready for $${token.symbol}: Score ${data.narrativeScore}/100. "${String(data.aiThesis || 'No thesis returned').slice(0, 75)}..."`,
+          `${data.source === 'LIVE' ? 'Gemini analysis' : 'Heuristic analysis'} ready for ${token.symbol}: Score ${data.narrativeScore}/100. "${String(data.aiThesis || 'No thesis returned').slice(0, 75)}..."`,
           'success'
         );
       }
@@ -446,17 +446,20 @@ export default function App() {
       addLog('RISK_CHECK', `Cannot execute buy: Active position $${activePosition.tokenSymbol} already open. Max 1 active position per risk limits.`, 'warning');
       return;
     }
-    if (remainingDailyLossBudget(riskSettings.maxDailyLossUsd, realizedPnL) <= 0) {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayRealized = ledgerMetrics(trades.filter(trade => trade.timestamp >= todayStart.getTime())).realizedPnL;
+    if (remainingDailyLossBudget(riskSettings.maxDailyLossUsd, todayRealized) <= 0) {
       addLog('RISK_CHECK', `Daily loss limit of $${riskSettings.maxDailyLossUsd.toFixed(2)} reached. New entries blocked.`, 'alert');
       return;
     }
     const dailySpend = dailySpendUsd(trades);
-    if (dailySpend + Math.min(riskSettings.maxPositionSizeUsd, wallet.cashUsd) > agentConfig.maxDailySpendUsd) {
+    if (dailySpend + Math.min(riskSettings.maxPositionSizeUsd, agentConfig.positionSizeUsd, wallet.cashUsd) > agentConfig.maxDailySpendUsd) {
       addLog('RISK_CHECK', `Daily spend limit of $${agentConfig.maxDailySpendUsd.toFixed(2)} reached.`, 'alert');
       return;
     }
     const score = token.narrativeScore ?? token.xVelocity;
-    if (score < riskSettings.minNarrativeScore || token.rugScore < 85 || token.liquidity < riskSettings.minLiquidityUsd) {
+    if (!Number.isFinite(score) || score < riskSettings.minNarrativeScore || token.rugScore < 85 || token.liquidity < riskSettings.minLiquidityUsd) {
       addLog('RISK_CHECK', `Entry blocked for $${token.symbol}: score, rug safety, or liquidity threshold failed.`, 'warning');
       return;
     }
@@ -796,7 +799,7 @@ export default function App() {
         <CaseStudyHero
           wallet={wallet}
           activePosition={activePosition}
-          totalTrades={trades.length}
+          totalTrades={ledger.closedCount}
           winningTrades={ledger.wins}
           realizedPnL={ledger.realizedPnL}
           totalFeesUsd={ledger.totalFees}
