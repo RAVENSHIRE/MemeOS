@@ -47,11 +47,11 @@ const DEFAULT_RISK_SETTINGS: AgentRiskSettings = {
 export default function App() {
   // 1. Data Sources Status
   const [sources, setSources] = useState<DataSourcesConfig>({
-    dexscreener: { status: 'LIVE', name: 'DexScreener API', info: 'Live Solana DEX pair search & token-profiles' },
-    solanaRpc: { status: 'LIVE', name: 'Solana RPC Gateway', info: 'Mainnet-beta slot cluster & keypair manager' },
+    dexscreener: { status: 'DISCONNECTED', name: 'DexScreener API', info: 'Live Solana DEX pair search & token-profiles' },
+    solanaRpc: { status: 'DISCONNECTED', name: 'Solana RPC Gateway', info: 'Mainnet-beta slot cluster & keypair manager' },
     xRadar: { status: 'DISCONNECTED', name: 'X Memetic Stream Radar', info: 'Configure X_SIGNAL_URL to enable monitored-account events' },
-    gemini: { status: 'LIVE', name: 'Gemini Intelligence Engine', info: 'AI thesis validation & narrative scoring' },
-    jupiter: { status: 'LIVE', name: 'Jupiter Swap Router', info: 'Ultra-low slippage Solana routing & fee optimizer' },
+    gemini: { status: 'DISCONNECTED', name: 'Gemini Intelligence Engine', info: 'AI thesis validation & narrative scoring' },
+    jupiter: { status: 'DISCONNECTED', name: 'Jupiter Swap Router', info: 'Ultra-low slippage Solana routing & fee optimizer' },
   });
 
   // 2. Wallet State
@@ -98,6 +98,8 @@ export default function App() {
     maxOpenExposureUsd: 5, maxPositions: 1, maxHoldingDays: 120,
   });
   const [latestSignal, setLatestSignal] = useState<AgentSignal | null>(null);
+  const [lastScanAt, setLastScanAt] = useState<number | null>(null);
+  const [marketStatus, setMarketStatus] = useState<'LIVE' | 'MOCK' | 'DISCONNECTED'>('DISCONNECTED');
 
   // 7. Modals
   const [isDataSourcesOpen, setIsDataSourcesOpen] = useState(false);
@@ -141,6 +143,8 @@ export default function App() {
         }
 
         setTokens(uniqueTokens);
+        setMarketStatus(data.source === 'LIVE' ? 'LIVE' : 'MOCK');
+        setLastScanAt(Date.now());
         setSelectedToken((prev) => prev || (uniqueTokens.length > 0 ? uniqueTokens[0] : null));
         if (data.source === 'LIVE') {
           setSources((s) => ({ ...s, dexscreener: { ...s.dexscreener, status: 'LIVE' } }));
@@ -150,16 +154,33 @@ export default function App() {
       }
     } catch (err) {
       console.error('Failed to fetch tokens:', err);
+      setMarketStatus('DISCONNECTED');
       setSources((s) => ({ ...s, dexscreener: { ...s.dexscreener, status: 'DISCONNECTED' } }));
       addLog('MARKET_SCAN', 'Market data unavailable; no new entries will be authorized.', 'alert');
+    }
+  }, []);
+
+  // Integration badges report actual adapter observations, not manually selected values.
+  const refreshSourceStatuses = useCallback(async () => {
+    try {
+      const response = await fetch('/api/market/sources-status');
+      if (!response.ok) throw new Error('Status endpoint unavailable');
+      const status = await response.json();
+      setSources(prev => Object.fromEntries(Object.entries(prev).map(([key, value]) => [key, {
+        ...(value as DataSourcesConfig[keyof DataSourcesConfig]),
+        status: ['LIVE', 'MOCK', 'DISCONNECTED'].includes(status[key]?.status) ? status[key].status : 'DISCONNECTED',
+      }])) as unknown as DataSourcesConfig);
+    } catch {
+      setSources(prev => Object.fromEntries(Object.entries(prev).map(([key, value]) => [key, { ...(value as DataSourcesConfig[keyof DataSourcesConfig]), status: 'DISCONNECTED' }])) as unknown as DataSourcesConfig);
     }
   }, []);
 
   // Initial load
   useEffect(() => {
     fetchMarketTokens();
+    refreshSourceStatuses();
     addLog('CONNECT', 'MEME OS boot sequence initialized. Waiting for Phantom wallet connection.', 'info');
-  }, [fetchMarketTokens, addLog]);
+  }, [fetchMarketTokens, refreshSourceStatuses, addLog]);
 
   const applyAgentCommand = useCallback(async (rawCommand: string) => {
     const command = rawCommand.trim();
@@ -218,7 +239,11 @@ export default function App() {
         if (!response.ok) return;
         const data = await response.json();
         if (cancelled) return;
-        if (Array.isArray(data.tokens) && data.tokens.length) setTokens(data.tokens);
+        const feedStatus = data.source === 'LIVE' ? 'LIVE' : data.source === 'MOCK' ? 'MOCK' : 'DISCONNECTED';
+        setMarketStatus(feedStatus);
+        setLastScanAt(Number.isFinite(data.fetchedAt) && data.fetchedAt > 0 ? data.fetchedAt : Date.now());
+        setSources(prev => ({ ...prev, dexscreener: { ...prev.dexscreener, status: feedStatus }, xRadar: { ...prev.xRadar, status: data.feeds?.x ? 'LIVE' : 'DISCONNECTED' }, jupiter: { ...prev.jupiter, status: data.feeds?.jupiter ? 'LIVE' : 'DISCONNECTED' } }));
+        if (Array.isArray(data.tokens)) setTokens(data.tokens);
         if (data.config) setAgentConfig(data.config);
         if (Array.isArray(data.tokens) && activePosition) {
           const liveToken = data.tokens.find((token: TokenOpportunity) => token.address === activePosition.tokenAddress);
@@ -242,7 +267,7 @@ export default function App() {
         if (signal) {
           setLatestSignal(signal);
           addLog(signal.signalType === 'FOMO' ? 'FOMO_WATCHLIST' : 'TRADE_CANDIDATE', `${signal.signalType} signal $${signal.token.symbol}: ${signal.reasons.join(', ')}`, 'success');
-          if (riskSettings.autoExecute && !activePosition) executeBuyTrade(signal.token);
+          if (feedStatus === 'LIVE' && riskSettings.autoExecute && !activePosition) executeBuyTrade(signal.token);
         }
       } catch (error) {
         addLog('MARKET_SCAN', `Agent scan unavailable: ${String(error)}`, 'warning');
@@ -409,6 +434,10 @@ export default function App() {
   const executeBuyTrade = (token: TokenOpportunity) => {
     if (!wallet.isSimulated) {
       addLog('RISK_CHECK', 'Mainnet wallet execution is disabled. Use the paper-trading sandbox.', 'alert');
+      return;
+    }
+    if (marketStatus !== 'LIVE') {
+      addLog('RISK_CHECK', 'Entry blocked: a verified live market feed is required, even in paper trading.', 'alert');
       return;
     }
     if (killSwitchActive || stoppedAtLoss || targetAchieved) {
@@ -806,6 +835,10 @@ export default function App() {
             <FomoAndXRadar
               tokens={tokens}
               selectedToken={selectedToken}
+              signal={latestSignal}
+              marketStatus={marketStatus}
+              xStatus={sources.xRadar.status}
+              lastScanAt={lastScanAt}
               onSelectToken={(t) => {
                 setSelectedToken(t);
                 addLog('OBSERVE', `Focused on $${t.symbol}: 5m volume $${t.volume24h.toLocaleString()}, X Velocity ${t.xVelocity}/100.`, 'info');
@@ -822,7 +855,7 @@ export default function App() {
               onExecuteTrade={executeBuyTrade}
               onAnalyzeWithAI={handleAnalyzeTokenWithAI}
               isAnalyzing={isAnalyzingToken}
-              canExecute={wallet.connected && wallet.isSimulated && !activePosition && !killSwitchActive && wallet.cashUsd >= 0.5}
+              canExecute={wallet.connected && wallet.isSimulated && marketStatus === 'LIVE' && !activePosition && !killSwitchActive && wallet.cashUsd >= 0.5}
             />
           </div>
         </div>
@@ -848,14 +881,7 @@ export default function App() {
         isOpen={isDataSourcesOpen}
         onClose={() => setIsDataSourcesOpen(false)}
         sources={sources}
-        onUpdateSourceStatus={(key, status) => {
-          setSources((prev) => ({
-            ...prev,
-            [key]: { ...prev[key], status },
-          }));
-          addLog('OBSERVE', `Integration [${key}] status updated to: ${status}`, status === 'DISCONNECTED' ? 'alert' : 'info');
-        }}
-        onRefreshSources={fetchMarketTokens}
+        onRefreshSources={() => { fetchMarketTokens(); refreshSourceStatuses(); }}
       />
 
       <RiskSettingsModal
