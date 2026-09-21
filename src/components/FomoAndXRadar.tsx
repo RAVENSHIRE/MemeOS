@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Activity, Radio, ShieldAlert } from 'lucide-react';
 import { AgentSignal, DataSourceStatus, TokenOpportunity } from '../types';
+import type { XAdapterEvent } from '../lib/api';
 
 interface Props {
   tokens: TokenOpportunity[];
@@ -10,10 +11,11 @@ interface Props {
   marketStatus: DataSourceStatus;
   xStatus: DataSourceStatus;
   lastScanAt: number | null;
+  xSignals: XAdapterEvent[];
 }
 
 export const FomoAndXRadar: React.FC<Props> = ({
-  tokens, onSelectToken, selectedToken, signal, marketStatus, xStatus, lastScanAt,
+  tokens, onSelectToken, selectedToken, signal, marketStatus, xStatus, lastScanAt, xSignals,
 }) => {
   const [activeTab, setActiveTab] = useState<'FOMO' | 'X_RADAR'>('FOMO');
   return (
@@ -53,8 +55,8 @@ export const FomoAndXRadar: React.FC<Props> = ({
       ) : (
         <div role="tabpanel" className="mt-4 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
           <div className="flex items-center gap-2 text-cyan-300 text-xs font-bold"><Radio className="w-4 h-4"/>X signal stream</div>
-          <p className="text-sm text-slate-300 mt-2">{xStatus === 'LIVE' ? 'X adapter is configured. Verified X events are not exposed separately by the current scan API.' : 'No verified X posts are available. Configure X_SIGNAL_URL and expose timestamped X events to populate this view.'}</p>
-          <p className="text-xs text-slate-400 mt-2 flex gap-2"><ShieldAlert className="w-4 h-4 shrink-0"/>Social velocity inferred from price movement is not a measured X engagement metric.</p>
+          {xSignals.length ? <div className="mt-3 space-y-2 max-h-[320px] overflow-y-auto">{xSignals.map((event, index) => <div key={`${event.tokenAddress}-${event.detectedAt}-${index}`} className="rounded-lg border border-slate-700 bg-slate-950/70 p-3"><div className="flex items-center justify-between gap-2"><strong className="text-xs text-cyan-200">${event.tokenSymbol}</strong><span className="text-[10px] text-slate-400">{new Date(event.detectedAt).toLocaleTimeString()}</span></div><p className="text-[11px] text-slate-300 mt-1">Adapter source: {event.source}</p>{event.score !== null && <p className="text-[10px] text-cyan-300 mt-1">Reported score: {event.score}/100</p>}{event.reasons.length > 0 && <p className="text-[11px] text-slate-400 mt-2">{event.reasons.join(' · ')}</p>}</div>)}</div> : <p className="text-sm text-slate-300 mt-2">{xStatus === 'LIVE' ? 'X adapter is reachable, but has no recent token-address-matched events to display.' : 'No current X adapter events. Configure X_SIGNAL_URL to enable this feed.'}</p>}
+          <p className="text-xs text-slate-400 mt-2 flex gap-2"><ShieldAlert className="w-4 h-4 shrink-0"/>Events are reported by the configured adapter; MEME OS does not independently verify accounts, engagement or authenticity.</p>
         </div>
       )}
     </section>
