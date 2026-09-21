@@ -327,13 +327,13 @@ app.get('/api/market/solana-tokens', async (req, res) => {
               fdv: parseFloat(p.fdv) || (price * 1000000000),
               narrative: `${symbol} Solana DEX pair active on ${p.dexId || 'Raydium/Pump'}.`,
               xVelocity: Math.min(99, Math.max(50, Math.floor(70 + (change5m > 0 ? change5m * 2 : 0)))),
-              xMentions1h: Math.floor(vol24 / 25000) + 120,
-              holdersCount: Math.floor(liq / 150) + 500,
-              riskLevel: liq > 50000 ? 'LOW' : 'MEDIUM',
-              rugScore: liq > 50000 ? 94 : 82,
-              mintDisabled: true,
-              freezeDisabled: true,
-              top10HoldingPercent: 12.5,
+              xMentions1h: 0, // X metrics cannot be inferred from DEX volume
+              holdersCount: 0, // no holder-index API in current adapter
+              riskLevel: liq > 50000 ? 'LOW' : 'MEDIUM', // liquidity-only heuristic, not an audit
+              rugScore: liq > 50000 ? 94 : 82, // legacy heuristic; NOT independently verified
+              mintDisabled: false, // unknown, must not be represented as verified
+              freezeDisabled: false, // unknown, must not be represented as verified
+              top10HoldingPercent: 0, // unavailable; never invent concentration data
               icon: ['🔥', '⚡', '🚀', '💎', '🎯', '🐾', '🤖', '🐶', '🧢', '🌟'][idx % 10],
             };
           });
@@ -567,16 +567,16 @@ app.post('/api/gemini/analyze-narrative', async (req, res) => {
       tokenSymbol: token.symbol,
       narrativeScore: calcScore,
       viralVelocity: calcScore > 85 ? 'EXTREME' : calcScore > 75 ? 'HIGH' : 'MODERATE',
-      aiThesis: `${token.symbol} demonstrates robust memetic resonance. Cult retention is high with top 10 holders at ${token.top10HoldingPercent || 14}%, mint authority revoked, and strong liquidity backstop.`,
+      aiThesis: `Heuristic market summary for ${token.symbol}: 5m price change ${Number(token.change5m || 0).toFixed(2)}%, reported DEX liquidity ${Number(token.liquidity || 0).toFixed(0)}. Social engagement and on-chain security are not independently verified.`,
       riskCheck: {
-        passed: (token.rugScore || 90) >= 80,
-        honeypotSafe: true,
-        mintRevoked: true,
-        freezeRevoked: true,
-        liquidityRisk: token.liquidity > 100000 ? 'SAFE' : 'MODERATE',
+        passed: false,
+        honeypotSafe: false,
+        mintRevoked: Boolean(token.mintDisabled),
+        freezeRevoked: Boolean(token.freezeDisabled),
+        liquidityRisk: token.liquidity > 100000 ? 'MODERATE' : 'HIGH',
       },
       recommendedAction: calcScore >= 78 ? 'TRADE_CANDIDATE' : 'WATCHLIST',
-      expectedUpside: '+28% to +65%',
+      expectedUpside: 'Not estimated',
     });
   }
 
@@ -629,18 +629,18 @@ Respond strictly in JSON matching this format:
     return res.json({
       source: 'MOCK',
       tokenSymbol: token.symbol,
-      narrativeScore: 84,
-      viralVelocity: 'HIGH',
-      aiThesis: `${token.symbol} demonstrates steady social momentum and clean liquidity metrics for capital deployment.`,
+      narrativeScore: 0,
+      viralVelocity: 'LOW',
+      aiThesis: `Gemini analysis unavailable for ${token.symbol}. Retry to obtain an AI thesis; this is not a verified risk assessment.`,
       riskCheck: {
-        passed: true,
-        honeypotSafe: true,
-        mintRevoked: true,
-        freezeRevoked: true,
-        liquidityRisk: 'SAFE',
+        passed: false,
+        honeypotSafe: false,
+        mintRevoked: false,
+        freezeRevoked: false,
+        liquidityRisk: 'HIGH',
       },
-      recommendedAction: 'TRADE_CANDIDATE',
-      expectedUpside: '+32% to +75%',
+      recommendedAction: 'WATCHLIST',
+      expectedUpside: 'Not estimated',
     });
   }
 });
@@ -726,10 +726,18 @@ Generate a comprehensive, Wall Street / high-frequency crypto fund grade Case St
       },
     });
 
-    const parsed = cleanAndParseJson(response.text, fallbackReport);
+    const parsed = cleanAndParseJson(response.text, fallbackReport) as Record<string, any>;
     return res.json({
       source: 'LIVE',
-      report: parsed,
+      report: {
+        ...fallbackReport,
+        executiveSummary: fallbackReport.executiveSummary,
+        metricsTable: fallbackReport.metricsTable,
+        narrativeAnalysis: typeof parsed.narrativeAnalysis === 'string' ? parsed.narrativeAnalysis : undefined,
+        tradeExecutionAudit: typeof parsed.tradeExecutionAudit === 'string' ? parsed.tradeExecutionAudit : undefined,
+        keyTakeaways: fallbackReport.keyTakeaways,
+        verifiedReproducibility: fallbackReport.verifiedReproducibility,
+      },
     });
   } catch (error) {
     console.error('Gemini Case Study generation error:', error);
