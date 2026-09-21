@@ -168,10 +168,10 @@ export default function App() {
       const status = await response.json();
       setSources(prev => Object.fromEntries(Object.entries(prev).map(([key, value]) => [key, {
         ...(value as DataSourcesConfig[keyof DataSourcesConfig]),
-        status: ['LIVE', 'MOCK', 'DISCONNECTED'].includes(status[key]?.status) ? status[key].status : 'DISCONNECTED',
+        status: key === 'dexscreener' ? value.status : ['LIVE', 'MOCK', 'DISCONNECTED'].includes(status[key]?.status) ? status[key].status : 'DISCONNECTED',
       }])) as unknown as DataSourcesConfig);
     } catch {
-      setSources(prev => Object.fromEntries(Object.entries(prev).map(([key, value]) => [key, { ...(value as DataSourcesConfig[keyof DataSourcesConfig]), status: 'DISCONNECTED' }])) as unknown as DataSourcesConfig);
+      setSources(prev => Object.fromEntries(Object.entries(prev).map(([key, value]) => [key, { ...(value as DataSourcesConfig[keyof DataSourcesConfig]), status: key === 'dexscreener' ? value.status : 'DISCONNECTED' }])) as unknown as DataSourcesConfig);
     }
   }, []);
 
