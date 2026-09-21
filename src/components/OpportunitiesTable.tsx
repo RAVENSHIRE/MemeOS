@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Sparkles,
   ShieldCheck,
@@ -22,6 +22,7 @@ interface Props {
   isAnalyzing: boolean;
   canExecute: boolean;
   maxPositionSizeUsd: number;
+  isLoading: boolean;
 }
 
 export const OpportunitiesTable: React.FC<Props> = ({
@@ -33,7 +34,11 @@ export const OpportunitiesTable: React.FC<Props> = ({
   isAnalyzing,
   canExecute,
   maxPositionSizeUsd,
+  isLoading,
 }) => {
+  const [query, setQuery] = useState('');
+  const [sort, setSort] = useState<'volume' | 'liquidity' | 'momentum'>('volume');
+  const visible = useMemo(() => tokens.filter(token => `${token.symbol} ${token.name} ${token.address}`.toLowerCase().includes(query.toLowerCase().trim())).sort((a, b) => sort === 'volume' ? b.volume24h - a.volume24h : sort === 'liquidity' ? b.liquidity - a.liquidity : b.change5m - a.change5m), [tokens, query, sort]);
   return (
     <div className="bg-[#0b101c] border border-slate-800 rounded-xl p-4 shadow-lg text-slate-100 flex flex-col h-full">
       {/* Header */}
@@ -58,9 +63,17 @@ export const OpportunitiesTable: React.FC<Props> = ({
         </div>
       </div>
 
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <label htmlFor="opportunity-search" className="sr-only">Search opportunities by name, symbol or address</label>
+        <input id="opportunity-search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search symbol or address" className="min-w-0 flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-cyan-400" />
+        <label htmlFor="opportunity-sort" className="sr-only">Sort opportunities</label>
+        <select id="opportunity-sort" value={sort} onChange={e => setSort(e.target.value as typeof sort)} className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-xs text-slate-200"><option value="volume">24h volume</option><option value="liquidity">Liquidity</option><option value="momentum">5m momentum</option></select>
+      </div>
       {/* Opportunities List */}
       <div className="mt-3 flex-1 overflow-y-auto space-y-2.5 max-h-[460px] pr-1 scrollbar-thin">
-        {tokens.map((token, idx) => {
+        {isLoading && tokens.length === 0 && <div role="status" aria-label="Loading market opportunities" className="space-y-3 animate-pulse">{[0, 1, 2].map(n => <div key={n} className="h-28 rounded-xl bg-slate-800/70" />)}</div>}
+        {!isLoading && visible.length === 0 && <p role="status" className="text-sm text-slate-400 p-4">{tokens.length ? 'No opportunities match your search.' : 'No market opportunities available. Check data source status.'}</p>}
+        {visible.map((token, idx) => {
           const isSelected =
             selectedToken?.address && token.address
               ? selectedToken.address === token.address
