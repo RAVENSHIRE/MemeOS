@@ -204,7 +204,8 @@ export const OpportunitiesTable: React.FC<Props> = ({
 
               <p className="text-[10px] text-amber-300">Risk indicator is a liquidity-based heuristic; mint/freeze authorities and holder concentration have not been verified by this feed.</p>
               {/* Row 4: Action Controls */}
-              <div className="flex items-center justify-between pt-1">
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                <button type="button" onClick={() => { onSelectToken(token); document.getElementById('token-inspector')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="text-xs rounded-lg border border-slate-700 px-3 py-1.5 text-slate-200 hover:border-cyan-600">Inspect</button>
                 <button
                   onClick={() => onAnalyzeWithAI(token)}
                   disabled={isAnalyzing}
