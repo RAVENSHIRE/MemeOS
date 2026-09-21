@@ -21,6 +21,7 @@ interface Props {
   onAnalyzeWithAI: (token: TokenOpportunity) => void;
   isAnalyzing: boolean;
   canExecute: boolean;
+  maxPositionSizeUsd: number;
 }
 
 export const OpportunitiesTable: React.FC<Props> = ({
@@ -31,6 +32,7 @@ export const OpportunitiesTable: React.FC<Props> = ({
   onAnalyzeWithAI,
   isAnalyzing,
   canExecute,
+  maxPositionSizeUsd,
 }) => {
   return (
     <div className="bg-[#0b101c] border border-slate-800 rounded-xl p-4 shadow-lg text-slate-100 flex flex-col h-full">
@@ -50,7 +52,7 @@ export const OpportunitiesTable: React.FC<Props> = ({
               </span>
             </div>
             <p className="text-[10px] font-mono text-slate-400">
-              Ranked by Narrative Strength Score, Liquidity Depth & Rug Risk
+              Market opportunities · heuristic scores are not verified safety guarantees
             </p>
           </div>
         </div>
@@ -63,7 +65,7 @@ export const OpportunitiesTable: React.FC<Props> = ({
             selectedToken?.address && token.address
               ? selectedToken.address === token.address
               : selectedToken?.symbol === token.symbol;
-          const score = token.narrativeScore || token.xVelocity || 80;
+          const score = token.narrativeScore ?? token.xVelocity;
           const isSafe = token.rugScore >= 85;
           const tokenKey = `opp-token-${token.address || token.symbol}-${idx}`;
 
@@ -132,7 +134,7 @@ export const OpportunitiesTable: React.FC<Props> = ({
                     }`}
                   >
                     <Flame className="w-3.5 h-3.5 text-amber-400" />
-                    <span>SCORE: {score}/100</span>
+                    <span>{token.narrativeScore == null ? 'HEURISTIC' : 'NARRATIVE'}: {score}/100</span>
                   </div>
 
                   {/* Rug Risk Badge */}
@@ -166,7 +168,7 @@ export const OpportunitiesTable: React.FC<Props> = ({
                 <div>
                   <span className="text-slate-500 block uppercase">Top 10 Holders</span>
                   <span className="text-emerald-400 font-bold">
-                    {token.top10HoldingPercent}% (Decentralized)
+                    {token.top10HoldingPercent}% (reported/estimated)
                   </span>
                 </div>
               </div>
@@ -182,7 +184,7 @@ export const OpportunitiesTable: React.FC<Props> = ({
                 </p>
                 {token.expectedUpside && (
                   <div className="mt-1 text-[10px] font-mono text-emerald-400">
-                    Expected Upside: {token.expectedUpside}
+                    Model scenario (unverified): {token.expectedUpside}
                   </div>
                 )}
               </div>
@@ -208,7 +210,7 @@ export const OpportunitiesTable: React.FC<Props> = ({
                   }`}
                 >
                   <Zap className="w-3 h-3 fill-current" />
-                  <span>Snipe Trade ($1.50)</span>
+                  <span>Paper buy (up to ${maxPositionSizeUsd.toFixed(2)})</span>
                 </button>
               </div>
             </div>
