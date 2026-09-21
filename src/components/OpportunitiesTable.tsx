@@ -53,7 +53,7 @@ export const OpportunitiesTable: React.FC<Props> = ({
                 LIVE OPPORTUNITIES & AI THESIS
               </span>
               <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-400 border border-cyan-800/40">
-                GEMINI POWERED
+                AI / HEURISTIC
               </span>
             </div>
             <p className="text-[10px] font-mono text-slate-400">
@@ -150,7 +150,7 @@ export const OpportunitiesTable: React.FC<Props> = ({
                     <span>{token.narrativeScore == null ? 'HEURISTIC' : 'NARRATIVE'}: {score}/100</span>
                   </div>
 
-                  {/* Rug Risk Badge */}
+                  {/* Liquidity-based risk proxy; token security is not independently verified. */}
                   <div
                     className={`flex items-center gap-1 px-2 py-1 rounded-lg border font-mono text-[10px] font-bold ${
                       isSafe
@@ -159,7 +159,7 @@ export const OpportunitiesTable: React.FC<Props> = ({
                     }`}
                   >
                     {isSafe ? <ShieldCheck className="w-3 h-3 text-emerald-400" /> : <ShieldAlert className="w-3 h-3 text-amber-400" />}
-                    <span>{token.riskLevel} RISK</span>
+                    <span>{token.riskLevel} · EST.</span>
                   </div>
                 </div>
               </div>
@@ -181,7 +181,7 @@ export const OpportunitiesTable: React.FC<Props> = ({
                 <div>
                   <span className="text-slate-500 block uppercase">Top 10 Holders</span>
                   <span className="text-emerald-400 font-bold">
-                    {token.top10HoldingPercent}% (reported/estimated)
+                    {token.top10HoldingPercent > 0 && token.analysisSource === 'LIVE' ? `${token.top10HoldingPercent}% (reported)` : 'Unavailable'}
                   </span>
                 </div>
               </div>
@@ -190,18 +190,19 @@ export const OpportunitiesTable: React.FC<Props> = ({
               <div className="bg-[#090d16] border border-cyan-500/20 rounded-lg p-2.5">
                 <div className="flex items-center gap-1.5 text-[10px] font-mono text-cyan-400 uppercase font-bold mb-1">
                   <Sparkles className="w-3 h-3" />
-                  <span>AI Thesis & Memetic Conviction:</span>
+                  <span>{token.analysisSource === 'LIVE' ? 'Gemini narrative analysis' : token.analysisSource === 'MOCK' ? 'Heuristic narrative (no AI)' : 'Market narrative (unverified)'}:</span>
                 </div>
                 <p className="text-xs text-slate-300 leading-relaxed">
                   {token.aiThesis || token.narrative}
                 </p>
-                {token.expectedUpside && (
+                {token.expectedUpside && token.expectedUpside !== 'Not estimated' && (
                   <div className="mt-1 text-[10px] font-mono text-emerald-400">
                     Model scenario (unverified): {token.expectedUpside}
                   </div>
                 )}
               </div>
 
+              <p className="text-[10px] text-amber-300">Risk indicator is a liquidity-based heuristic; mint/freeze authorities and holder concentration have not been verified by this feed.</p>
               {/* Row 4: Action Controls */}
               <div className="flex items-center justify-between pt-1">
                 <button
