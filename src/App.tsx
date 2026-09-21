@@ -19,6 +19,8 @@ import {
 } from './types';
 
 import { HeaderBar } from './components/HeaderBar';
+import { OverviewStrip } from './components/OverviewStrip';
+import { apiRequest, isFreshLiveMarket, uniqueTokens, type MarketSnapshot } from './lib/api';
 import { AgentLoopPipeline } from './components/AgentLoopPipeline';
 import { CaseStudyHero } from './components/CaseStudyHero';
 import { WalletCard } from './components/WalletCard';
@@ -99,6 +101,8 @@ export default function App() {
   });
   const [latestSignal, setLatestSignal] = useState<AgentSignal | null>(null);
   const [lastScanAt, setLastScanAt] = useState<number | null>(null);
+  const [marketLoading, setMarketLoading] = useState(true);
+  const [marketError, setMarketError] = useState<string | null>(null);
   const [marketStatus, setMarketStatus] = useState<'LIVE' | 'MOCK' | 'DISCONNECTED'>('DISCONNECTED');
 
   // 7. Modals
@@ -121,51 +125,34 @@ export default function App() {
     setLogs((prev) => [...prev.slice(-120), newLog]);
   }, []);
 
-  // Fetch initial market tokens
+  // Initial market view: one source of truth for identity, provenance and loading state.
   const fetchMarketTokens = useCallback(async () => {
+    setMarketLoading(true);
+    setMarketError(null);
     try {
-      const res = await fetch('/api/market/solana-tokens');
-      if (!res.ok) throw new Error(`Market data request failed (${res.status})`);
-      const data = await res.json();
-      if (data && Array.isArray(data.tokens)) {
-        const seenSymbols = new Set<string>();
-        const seenAddresses = new Set<string>();
-        const uniqueTokens: TokenOpportunity[] = [];
-        for (const t of data.tokens) {
-          const sym = (t.symbol || '').toUpperCase().trim();
-          const addr = (t.address || '').trim();
-          if (!sym) continue;
-          if (seenSymbols.has(sym)) continue;
-          if (addr && seenAddresses.has(addr)) continue;
-          seenSymbols.add(sym);
-          if (addr) seenAddresses.add(addr);
-          uniqueTokens.push(t);
-        }
-
-        setTokens(uniqueTokens);
-        setMarketStatus(data.source === 'LIVE' ? 'LIVE' : 'MOCK');
-        setLastScanAt(Date.now());
-        setSelectedToken((prev) => prev || (uniqueTokens.length > 0 ? uniqueTokens[0] : null));
-        if (data.source === 'LIVE') {
-          setSources((s) => ({ ...s, dexscreener: { ...s.dexscreener, status: 'LIVE' } }));
-        } else {
-          setSources((s) => ({ ...s, dexscreener: { ...s.dexscreener, status: 'MOCK' } }));
-        }
-      }
-    } catch (err) {
-      console.error('Failed to fetch tokens:', err);
+      const data = await apiRequest<MarketSnapshot>('/api/market/solana-tokens');
+      const live = data.source === 'LIVE';
+      const nextTokens = uniqueTokens(Array.isArray(data.tokens) ? data.tokens : []);
+      setTokens(nextTokens);
+      setSelectedToken(prev => nextTokens.find(t => t.address === prev?.address) || nextTokens[0] || null);
+      setMarketStatus(live ? 'LIVE' : data.source === 'MOCK' ? 'MOCK' : 'DISCONNECTED');
+      setLastScanAt(Date.now());
+      setSources(s => ({ ...s, dexscreener: { ...s.dexscreener, status: live ? 'LIVE' : data.source === 'MOCK' ? 'MOCK' : 'DISCONNECTED' } }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Market feed unavailable';
+      setMarketError(message);
       setMarketStatus('DISCONNECTED');
-      setSources((s) => ({ ...s, dexscreener: { ...s.dexscreener, status: 'DISCONNECTED' } }));
-      addLog('MARKET_SCAN', 'Market data unavailable; no new entries will be authorized.', 'alert');
+      setSources(s => ({ ...s, dexscreener: { ...s.dexscreener, status: 'DISCONNECTED' } }));
+      addLog('MARKET_SCAN', `Market data unavailable: ${message}. New entries disabled.`, 'alert');
+    } finally {
+      setMarketLoading(false);
     }
-  }, []);
+  }, [addLog]);
 
   // Integration badges report actual adapter observations, not manually selected values.
   const refreshSourceStatuses = useCallback(async () => {
     try {
-      const response = await fetch('/api/market/sources-status');
-      if (!response.ok) throw new Error('Status endpoint unavailable');
-      const status = await response.json();
+      const status = await apiRequest<Record<string, { status?: string }>>('/api/market/sources-status');
       setSources(prev => Object.fromEntries(Object.entries(prev).map(([key, value]) => [key, {
         ...(value as DataSourcesConfig[keyof DataSourcesConfig]),
         status: key === 'dexscreener' ? value.status : ['LIVE', 'MOCK', 'DISCONNECTED'].includes(status[key]?.status) ? status[key].status : 'DISCONNECTED',
@@ -235,15 +222,14 @@ export default function App() {
     let cancelled = false;
     const scan = async () => {
       try {
-        const response = await fetch('/api/agent/scan');
-        if (!response.ok) throw new Error(`Scan failed (${response.status})`);
-        const data = await response.json();
+        const data = await apiRequest<MarketSnapshot & { config?: AgentConfig; feeds?: { x?: boolean; jupiter?: boolean } }>('/api/agent/scan', {}, 9000);
         if (cancelled) return;
         const feedStatus = data.source === 'LIVE' ? 'LIVE' : data.source === 'MOCK' ? 'MOCK' : 'DISCONNECTED';
         setMarketStatus(feedStatus);
-        setLastScanAt(Number.isFinite(data.fetchedAt) && data.fetchedAt > 0 ? data.fetchedAt : Date.now());
+        setLastScanAt(Number.isFinite(data.fetchedAt) && (data.fetchedAt || 0) > 0 ? data.fetchedAt! : Date.now());
+        setMarketError(null);
         setSources(prev => ({ ...prev, dexscreener: { ...prev.dexscreener, status: feedStatus }, xRadar: { ...prev.xRadar, status: data.feeds?.x ? 'LIVE' : 'DISCONNECTED' }, jupiter: { ...prev.jupiter, status: data.feeds?.jupiter ? 'LIVE' : 'DISCONNECTED' } }));
-        if (Array.isArray(data.tokens)) setTokens(data.tokens);
+        if (Array.isArray(data.tokens)) setTokens(uniqueTokens(data.tokens));
         if (data.config) setAgentConfig(data.config);
         if (Array.isArray(data.tokens) && activePosition) {
           const liveToken = data.tokens.find((token: TokenOpportunity) => token.address === activePosition.tokenAddress);
@@ -263,7 +249,7 @@ export default function App() {
             });
           }
         }
-        const signal = data.signals?.[0] as AgentSignal | undefined;
+        const signal = data.signals?.[0];
         if (signal) {
           setLatestSignal(signal);
           addLog(signal.signalType === 'FOMO' ? 'FOMO_WATCHLIST' : 'TRADE_CANDIDATE', `${signal.signalType} signal $${signal.token.symbol}: ${signal.reasons.join(', ')}`, 'success');
@@ -272,13 +258,20 @@ export default function App() {
       } catch (error) {
         if (cancelled) return;
         setMarketStatus('DISCONNECTED');
+        setMarketError(error instanceof Error ? error.message : 'Scan unavailable');
         setSources(prev => ({ ...prev, dexscreener: { ...prev.dexscreener, status: 'DISCONNECTED' } }));
         addLog('MARKET_SCAN', `Agent scan unavailable: ${String(error)}. New entries disabled.`, 'warning');
       }
     };
-    scan();
-    const timer = setInterval(scan, 5000);
-    return () => { cancelled = true; clearInterval(timer); };
+    // Recursive timeout avoids concurrent requests during slow upstream responses.
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      if (cancelled) return;
+      await scan();
+      if (!cancelled) timer = setTimeout(poll, 5000);
+    };
+    void poll();
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [isAgentActive, killSwitchActive, activePosition]);
 
   // Connect Real Phantom Wallet
@@ -439,7 +432,7 @@ export default function App() {
       addLog('RISK_CHECK', 'Mainnet wallet execution is disabled. Use the paper-trading sandbox.', 'alert');
       return;
     }
-    if (marketStatus !== 'LIVE') {
+    if (!isFreshLiveMarket(marketStatus, lastScanAt)) {
       addLog('RISK_CHECK', 'Entry blocked: a verified live market feed is required, even in paper trading.', 'alert');
       return;
     }
@@ -780,7 +773,9 @@ export default function App() {
       />
 
       {/* Main Single-Screen Command Center */}
-      <main className="max-w-7xl mx-auto p-4 space-y-4">
+      <main className="max-w-[1600px] mx-auto p-4 sm:p-6 space-y-5 dashboard-glow">
+        <OverviewStrip wallet={wallet} position={activePosition} trades={trades} realizedPnL={realizedPnL} risk={riskSettings} marketStatus={marketStatus} lastScanAt={lastScanAt} isAgentActive={isAgentActive} killSwitchActive={killSwitchActive} />
+        {marketError && <div role="alert" className="rounded-xl border border-rose-700/60 bg-rose-950/40 p-3 text-xs text-rose-200 flex flex-wrap justify-between items-center gap-2"><span>Market data error: {marketError}</span><button className="rounded-lg border border-rose-500/50 px-3 py-1.5 hover:bg-rose-900" onClick={fetchMarketTokens}>Retry</button></div>}
         <AgentCommandPanel config={agentConfig} signal={latestSignal} onCommand={applyAgentCommand} />
         {/* 1. The 14-Step AGENT LOOP Pipeline */}
         <AgentLoopPipeline
@@ -858,8 +853,9 @@ export default function App() {
               onExecuteTrade={executeBuyTrade}
               onAnalyzeWithAI={handleAnalyzeTokenWithAI}
               isAnalyzing={isAnalyzingToken}
+              isLoading={marketLoading}
               maxPositionSizeUsd={riskSettings.maxPositionSizeUsd}
-              canExecute={wallet.connected && wallet.isSimulated && marketStatus === 'LIVE' && !activePosition && !killSwitchActive && wallet.cashUsd >= 0.5}
+              canExecute={wallet.connected && wallet.isSimulated && isFreshLiveMarket(marketStatus, lastScanAt) && !activePosition && !killSwitchActive && wallet.cashUsd >= 0.5}
             />
           </div>
         </div>
