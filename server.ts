@@ -386,7 +386,7 @@ const agentConfig: AgentConfig = {
   dailyRunners: true, aggressive: false, positionSizeUsd: 1.5, maxDailySpendUsd: 25,
   maxOpenExposureUsd: 5, maxPositions: 1, maxHoldingDays: 120,
 };
-const marketCache: { expiresAt: number; tokens: any[] } = { expiresAt: 0, tokens: [] };
+const marketCache: { expiresAt: number; tokens: any[]; source: 'LIVE' | 'MOCK' | 'DISCONNECTED'; fetchedAt: number } = { expiresAt: 0, tokens: [], source: 'DISCONNECTED', fetchedAt: 0 };
 const externalCache: { expiresAt: number; payload: any } = { expiresAt: 0, payload: {} };
 const jupiterCache: { expiresAt: number; prices: Record<string, number> } = { expiresAt: 0, prices: {} };
 const history = new Map<string, Snapshot[]>();
@@ -466,7 +466,13 @@ app.get('/api/agent/scan', async (_req, res) => {
     if (response?.ok) {
       const data = await response.json();
       marketCache.tokens = Array.isArray(data.tokens) ? data.tokens : [];
+      marketCache.source = data.source === 'LIVE' ? 'LIVE' : data.source === 'MOCK' ? 'MOCK' : 'DISCONNECTED';
+      marketCache.fetchedAt = now;
       marketCache.expiresAt = now + 15000;
+    } else {
+      marketCache.source = 'DISCONNECTED';
+      marketCache.tokens = [];
+      marketCache.expiresAt = now + 5000;
     }
   }
   if (externalCache.expiresAt <= now) {
@@ -492,9 +498,10 @@ app.get('/api/agent/scan', async (_req, res) => {
     jupiterCache.expiresAt = now + 15000;
   }
   marketCache.tokens = marketCache.tokens.map((token) => jupiterCache.prices[token.address] ? { ...token, priceUsd: jupiterCache.prices[token.address] } : token);
-  const signals = buildSignals(marketCache.tokens);
+  // Demo and disconnected market data must never generate executable signals.
+  const signals = marketCache.source === 'LIVE' ? buildSignals(marketCache.tokens) : [];
   persistHistory();
-  const externalSignals = externalCache.payload.responses.flatMap((payload: any) => Array.isArray(payload?.signals) ? payload.signals : []).map((event: any) => {
+  const externalSignals = (marketCache.source === 'LIVE' ? externalCache.payload.responses : []).flatMap((payload: any) => Array.isArray(payload?.signals) ? payload.signals : []).map((event: any) => {
     const token = marketCache.tokens.find((item) => item.address === event.tokenAddress || item.symbol === event.symbol);
     if (!token) return null;
     const source = String(event.source || event.trader || event.account || 'external');
@@ -504,14 +511,14 @@ app.get('/api/agent/scan', async (_req, res) => {
   }).filter(Boolean);
   const freshSignals = [...externalSignals, ...signals].filter((signal) => now - (lastSignalAt.get(signal.token.address) || 0) > 30000);
   freshSignals.forEach((signal) => lastSignalAt.set(signal.token.address, now));
-  res.json({ source: marketCache.tokens.length ? 'LIVE_OR_CACHED' : 'DISCONNECTED', tokens: marketCache.tokens, signals: freshSignals.slice(0, 5), config: agentConfig, feeds: { dexScreener: true, jupiter: Object.keys(jupiterCache.prices).length > 0, x: Boolean(process.env.X_SIGNAL_URL), onChain: Boolean(process.env.ONCHAIN_SIGNAL_URL), pumpSwap: Boolean(process.env.PUMPSWAP_SIGNAL_URL) }, external: externalCache.payload, cacheExpiresAt: Math.min(marketCache.expiresAt, jupiterCache.expiresAt || marketCache.expiresAt) });
+  res.json({ source: marketCache.source, fetchedAt: marketCache.fetchedAt, tokens: marketCache.tokens, signals: freshSignals.slice(0, 5), config: agentConfig, feeds: { dexScreener: marketCache.source === 'LIVE', jupiter: Object.keys(jupiterCache.prices).length > 0, x: Boolean(process.env.X_SIGNAL_URL), onChain: Boolean(process.env.ONCHAIN_SIGNAL_URL), pumpSwap: Boolean(process.env.PUMPSWAP_SIGNAL_URL) }, external: { configured: externalCache.payload.configured || 0, received: externalCache.payload.responses?.length || 0 }, cacheExpiresAt: Math.min(marketCache.expiresAt, jupiterCache.expiresAt || marketCache.expiresAt) });
 });
 
 // Endpoint: Check system integration statuses
 app.get('/api/market/sources-status', (req, res) => {
   const hasGemini = Boolean(process.env.GEMINI_API_KEY);
   res.json({
-    dexscreener: { status: 'LIVE', lastSync: new Date().toISOString() },
+    dexscreener: { status: marketCache.source, lastSync: marketCache.fetchedAt ? new Date(marketCache.fetchedAt).toISOString() : null },
     solanaRpc: { status: process.env.SOLANA_RPC_URL ? 'LIVE' : 'DISCONNECTED', cluster: 'mainnet-beta' },
     xRadar: { status: process.env.X_SIGNAL_URL ? 'LIVE' : 'DISCONNECTED', tracker: process.env.X_SIGNAL_URL ? 'Configured signal adapter' : 'Configure X_SIGNAL_URL' },
     gemini: {
@@ -519,7 +526,7 @@ app.get('/api/market/sources-status', (req, res) => {
       model: 'gemini-3.6-flash',
       mode: hasGemini ? 'Active Server Intelligence' : 'Heuristic Engine (Mock)',
     },
-    jupiter: { status: 'LIVE', router: 'Cached price enrichment; paper route only' },
+    jupiter: { status: Object.keys(jupiterCache.prices).length ? 'LIVE' : 'DISCONNECTED', router: 'Cached price enrichment; paper route only' },
   });
 });
 
